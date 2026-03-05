@@ -16,3 +16,21 @@ kvstore_apply_compiler_warnings(kvstore_smoke_test)
 kvstore_apply_sanitizers(kvstore_smoke_test)
 
 add_test(NAME kvstore_smoke_test COMMAND kvstore_smoke_test)
+
+add_executable(kvstore_wal_test wal_test.cpp)
+target_link_libraries(kvstore_wal_test PRIVATE kvstore_core)
+kvstore_apply_compiler_warnings(kvstore_wal_test)
+kvstore_apply_sanitizers(kvstore_wal_test)
+add_test(NAME kvstore_wal_test COMMAND kvstore_wal_test)
+
+add_executable(kvstore_recovery_test recovery_test.cpp)
+target_link_libraries(kvstore_recovery_test PRIVATE kvstore_core)
+kvstore_apply_compiler_warnings(kvstore_recovery_test)
+kvstore_apply_sanitizers(kvstore_recovery_test)
+add_test(NAME kvstore_recovery_test COMMAND kvstore_recovery_test)
+
+add_executable(kvstore_idempotency_test idempotency_test.cpp)
+target_link_libraries(kvstore_idempotency_test PRIVATE kvstore_core)
+kvstore_apply_compiler_warnings(kvstore_idempotency_test)
+kvstore_apply_sanitizers(kvstore_idempotency_test)
+add_test(NAME kvstore_idempotency_test COMMAND kvstore_idempotency_test)
