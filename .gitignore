@@ -1,0 +1,5 @@
+/build/
+/Testing/
+/.sisyphus/
+/.tools/
+/.sisyphus/evidence/*.log
