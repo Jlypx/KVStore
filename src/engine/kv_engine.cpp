@@ -1,8 +1,43 @@
 #include "kvstore/engine/kv_engine.h"
 
+#include <algorithm>
+#include <cctype>
+#include <system_error>
 #include <utility>
 
 namespace kvstore::engine {
+namespace {
+
+auto ParseSstIdFromFilename(const std::filesystem::path& path)
+    -> std::optional<std::uint64_t> {
+  if (path.extension() != ".sst") {
+    return std::nullopt;
+  }
+  const auto stem = path.stem().string();
+  if (stem.empty()) {
+    return std::nullopt;
+  }
+  std::uint64_t value = 0;
+  for (char ch : stem) {
+    if (!std::isdigit(static_cast<unsigned char>(ch))) {
+      return std::nullopt;
+    }
+    const auto digit = static_cast<std::uint64_t>(ch - '0');
+    value = value * 10ULL + digit;
+  }
+  return value;
+}
+
+auto FormatSstFilename(std::uint64_t id) -> std::string {
+  // 6 digits (matches WAL naming style in tests), but allow growth beyond.
+  std::string out = std::to_string(id);
+  if (out.size() < 6) {
+    out = std::string(6 - out.size(), '0') + out;
+  }
+  return out + ".sst";
+}
+
+}  // namespace
 
 KvEngine::KvEngine(std::filesystem::path wal_path) : wal_path_(std::move(wal_path)) {}
 
@@ -10,6 +45,12 @@ auto KvEngine::Open() -> bool {
   memtable_ = MemTable{};
   recovery_stats_ = WalReplayStats{};
   last_integrity_error_.reset();
+
+  sst_dir_ = wal_path_.parent_path() / "sst";
+  block_cache_ = std::make_shared<cache::BlockCache>(64);
+  if (!LoadSstables()) {
+    return false;
+  }
 
   WalReplayResult replay_result;
   std::size_t duplicate_requests = 0;
@@ -68,8 +109,108 @@ auto KvEngine::Delete(std::string key, std::string request_id) -> ApplyResult {
   return ApplyMutation(mutation);
 }
 
-auto KvEngine::Get(const std::string& key) const -> std::optional<std::string> {
-  return memtable_.Get(key);
+auto KvEngine::Get(const std::string& key) -> std::optional<std::string> {
+  last_integrity_error_.reset();
+
+  const auto mem_value = memtable_.Get(key);
+  if (mem_value.has_value()) {
+    return mem_value;
+  }
+
+  // Newest-to-oldest search.
+  for (std::size_t i = sstables_.size(); i > 0; --i) {
+    const auto& sst = sstables_[i - 1];
+    const auto res = sst.reader.Get(key);
+    if (!res.Ok()) {
+      last_integrity_error_ = res.error;
+      return std::nullopt;
+    }
+    if (res.found) {
+      return res.value;
+    }
+  }
+  return std::nullopt;
+}
+
+auto KvEngine::Flush() -> bool {
+  last_integrity_error_.reset();
+  const auto entries = memtable_.SortedEntries();
+  if (entries.empty()) {
+    return true;
+  }
+
+  integrity::IntegrityError error;
+  const auto path = NextSstPath();
+  const SstWriteOptions options{
+      .target_block_size = 4096,
+  };
+  if (!SstWriter::Write(path, entries, options, &error)) {
+    last_integrity_error_ = error;
+    return false;
+  }
+
+  SstReader reader(block_cache_);
+  if (!reader.Open(path, &error)) {
+    last_integrity_error_ = error;
+    return false;
+  }
+  sstables_.push_back(SstableFile{.path = path, .reader = std::move(reader)});
+  memtable_.ClearKvs();
+  return true;
+}
+
+auto KvEngine::Compact() -> bool {
+  last_integrity_error_.reset();
+
+  // Ensure MemTable state is persisted before compacting.
+  if (!Flush()) {
+    return false;
+  }
+  if (sstables_.size() <= 1) {
+    return true;
+  }
+
+  std::vector<std::filesystem::path> inputs;
+  inputs.reserve(sstables_.size());
+  for (const auto& sst : sstables_) {
+    inputs.push_back(sst.path);
+  }
+
+  const auto output_path = NextSstPath();
+  const SstWriteOptions options{
+      .target_block_size = 4096,
+  };
+  integrity::IntegrityError compact_error;
+  if (!Compactor::CompactToSingleSstable(inputs, output_path, options,
+                                        block_cache_, &compact_error)) {
+    last_integrity_error_ = compact_error;
+    return false;
+  }
+
+  integrity::IntegrityError open_error;
+  SstReader output_reader(block_cache_);
+  if (!output_reader.Open(output_path, &open_error)) {
+    last_integrity_error_ = open_error;
+    return false;
+  }
+
+  std::error_code ec;
+  for (const auto& input : inputs) {
+    std::filesystem::remove(input, ec);
+    if (ec) {
+      last_integrity_error_ = integrity::IntegrityError{
+          .code = integrity::IntegrityErrorCode::kIoError,
+          .record_index = 0,
+          .message = "failed to remove compacted SST: " + ec.message(),
+      };
+      return false;
+    }
+  }
+
+  sstables_.clear();
+  sstables_.push_back(
+      SstableFile{.path = output_path, .reader = std::move(output_reader)});
+  return true;
 }
 
 auto KvEngine::recovery_stats() const -> WalReplayStats {
@@ -145,6 +286,68 @@ auto KvEngine::ApplyMutation(const Mutation& mutation) -> ApplyResult {
       .duplicate = (apply_result == ApplyDisposition::kDuplicate),
       .error = std::nullopt,
   };
+}
+
+auto KvEngine::LoadSstables() -> bool {
+  sstables_.clear();
+  next_sst_id_ = 1;
+
+  std::error_code ec;
+  std::filesystem::create_directories(sst_dir_, ec);
+  if (ec) {
+    last_integrity_error_ = integrity::IntegrityError{
+        .code = integrity::IntegrityErrorCode::kIoError,
+        .record_index = 0,
+        .message = "failed to create SST directory: " + ec.message(),
+    };
+    return false;
+  }
+
+  std::vector<std::pair<std::uint64_t, std::filesystem::path>> sst_paths;
+  for (const auto& entry : std::filesystem::directory_iterator(sst_dir_, ec)) {
+    if (ec) {
+      break;
+    }
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const auto id = ParseSstIdFromFilename(entry.path());
+    if (!id.has_value()) {
+      continue;
+    }
+    sst_paths.emplace_back(id.value(), entry.path());
+  }
+  if (ec) {
+    last_integrity_error_ = integrity::IntegrityError{
+        .code = integrity::IntegrityErrorCode::kIoError,
+        .record_index = 0,
+        .message = "failed to list SST directory: " + ec.message(),
+    };
+    return false;
+  }
+
+  std::sort(sst_paths.begin(), sst_paths.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+
+  std::uint64_t max_id = 0;
+  for (const auto& [id, path] : sst_paths) {
+    integrity::IntegrityError open_error;
+    SstReader reader(block_cache_);
+    if (!reader.Open(path, &open_error)) {
+      last_integrity_error_ = open_error;
+      return false;
+    }
+    sstables_.push_back(SstableFile{.path = path, .reader = std::move(reader)});
+    max_id = std::max(max_id, id);
+  }
+  next_sst_id_ = max_id + 1;
+  return true;
+}
+
+auto KvEngine::NextSstPath() -> std::filesystem::path {
+  const auto id = next_sst_id_;
+  next_sst_id_ += 1;
+  return sst_dir_ / FormatSstFilename(id);
 }
 
 }  // namespace kvstore::engine

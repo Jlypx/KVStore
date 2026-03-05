@@ -4,6 +4,9 @@ add_library(
   engine/memtable.cpp
   engine/wal.cpp
   engine/kv_engine.cpp
+  engine/sstable.cpp
+  engine/compaction.cpp
+  cache/block_cache.cpp
   integrity/crc32c.cpp
 )
 

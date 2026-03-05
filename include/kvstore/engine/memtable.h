@@ -3,6 +3,8 @@
 
 #include <cstddef>
 #include <optional>
+#include <utility>
+#include <vector>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -37,6 +39,14 @@ class MemTable {
       -> bool;
 
   [[nodiscard]] auto EntryCount() const -> std::size_t;
+
+  // Snapshot current key/value state for SSTable flush.
+  // The returned vector is sorted by key in ascending order.
+  [[nodiscard]] auto SortedEntries() const
+      -> std::vector<std::pair<std::string, std::string>>;
+
+  // Clears only the key/value map, keeping request-id history for idempotency.
+  auto ClearKvs() -> void;
 
  private:
   std::unordered_map<std::string, std::string> kv_;

@@ -2,10 +2,15 @@
 #define KVSTORE_ENGINE_KV_ENGINE_H
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 
+#include "kvstore/cache/block_cache.h"
+
+#include "kvstore/engine/compaction.h"
 #include "kvstore/engine/memtable.h"
+#include "kvstore/engine/sstable.h"
 #include "kvstore/engine/wal.h"
 #include "kvstore/integrity/integrity_error.h"
 
@@ -30,8 +35,17 @@ class KvEngine {
 
   auto Delete(std::string key, std::string request_id) -> ApplyResult;
 
-  [[nodiscard]] auto Get(const std::string& key) const
-      -> std::optional<std::string>;
+  // Reads are served from MemTable first, then newest-to-oldest SSTables.
+  // On SST corruption, this returns std::nullopt and sets last_integrity_error().
+  [[nodiscard]] auto Get(const std::string& key) -> std::optional<std::string>;
+
+  // Flushes MemTable to a new SSTable and clears in-memory kv state.
+  // Request-id history is retained for idempotency.
+  auto Flush() -> bool;
+
+  // Compacts current SSTables into a single SSTable.
+  // This is a minimal v1 compaction suitable for tests and correctness.
+  auto Compact() -> bool;
 
   [[nodiscard]] auto recovery_stats() const -> WalReplayStats;
 
@@ -40,12 +54,24 @@ class KvEngine {
 
  private:
   auto ApplyMutation(const Mutation& mutation) -> ApplyResult;
+  auto LoadSstables() -> bool;
+  auto NextSstPath() -> std::filesystem::path;
 
   std::filesystem::path wal_path_;
+  std::filesystem::path sst_dir_;
   MemTable memtable_;
   WalWriter wal_writer_;
   WalReplayStats recovery_stats_;
   std::optional<integrity::IntegrityError> last_integrity_error_;
+
+  std::shared_ptr<cache::BlockCache> block_cache_;
+
+  struct SstableFile {
+    std::filesystem::path path;
+    SstReader reader;
+  };
+  std::vector<SstableFile> sstables_;  // oldest -> newest
+  std::uint64_t next_sst_id_ = 1;
 };
 
 }  // namespace kvstore::engine
