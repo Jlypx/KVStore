@@ -11,3 +11,15 @@ add_test(kvstore_raft_election_test "build/tests/kvstore_raft_election_test")
 add_test(kvstore_raft_replication_test "build/tests/kvstore_raft_replication_test")
 add_test(kvstore_raft_quorum_test "build/tests/kvstore_raft_quorum_test")
 add_test(kvstore_raft_failover_test "build/tests/kvstore_raft_failover_test")
+add_test(kvstore_grpc_integration_test "build/tests/grpc/kvstore_grpc_integration_test")
+add_test(kvstore_grpc_idempotency_test "build/tests/grpc/kvstore_grpc_idempotency_test")
+add_test(kvstore_api_status_test "build/tests/grpc/kvstore_api_status_test")
+add_test(kvstore_integration_failover_test "build/tests/integration/kvstore_integration_failover_test")
+
+set_tests_properties(
+  kvstore_grpc_integration_test
+  kvstore_grpc_idempotency_test
+  kvstore_api_status_test
+  PROPERTIES
+  ENVIRONMENT "LD_LIBRARY_PATH=.tools/grpc/sysroot/usr/lib/x86_64-linux-gnu:.tools/grpc/sysroot/usr/lib:$ENV{LD_LIBRARY_PATH}"
+)

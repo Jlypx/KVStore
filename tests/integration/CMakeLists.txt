@@ -1,0 +1,5 @@
+add_executable(kvstore_integration_failover_test failover_test.cpp)
+target_link_libraries(kvstore_integration_failover_test PRIVATE kvstore_service)
+kvstore_apply_compiler_warnings(kvstore_integration_failover_test)
+kvstore_apply_sanitizers(kvstore_integration_failover_test)
+add_test(NAME kvstore_integration_failover_test COMMAND kvstore_integration_failover_test)

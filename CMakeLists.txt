@@ -10,6 +10,9 @@ option(KVSTORE_ENABLE_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
 option(KVSTORE_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(KVSTORE_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(KVSTORE_ENABLE_CLANG_TIDY "Enable clang-tidy when available" OFF)
+option(KVSTORE_ENABLE_GRPC "Build gRPC service/server components" ON)
+
+list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 if(KVSTORE_ENABLE_CLANG_TIDY)
   find_program(CLANG_TIDY_BIN NAMES clang-tidy)

@@ -10,6 +10,12 @@ if(KVSTORE_FETCH_GTEST)
   FetchContent_MakeAvailable(googletest)
 endif()
 
+if(KVSTORE_ENABLE_GRPC)
+  # Add subdirectories early so CTest can discover their tests reliably.
+  add_subdirectory(grpc)
+  add_subdirectory(integration)
+endif()
+
 add_executable(kvstore_smoke_test smoke_test.cpp)
 target_link_libraries(kvstore_smoke_test PRIVATE kvstore_core)
 kvstore_apply_compiler_warnings(kvstore_smoke_test)
