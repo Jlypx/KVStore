@@ -1,5 +1,30 @@
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 add_executable(kvstore_integration_failover_test failover_test.cpp)
 target_link_libraries(kvstore_integration_failover_test PRIVATE kvstore_service)
 kvstore_apply_compiler_warnings(kvstore_integration_failover_test)
 kvstore_apply_sanitizers(kvstore_integration_failover_test)
 add_test(NAME kvstore_integration_failover_test COMMAND kvstore_integration_failover_test)
+
+add_executable(kvstore_chaos_gate_test chaos_gate_test.cpp)
+target_link_libraries(kvstore_chaos_gate_test PRIVATE kvstore_service)
+kvstore_apply_compiler_warnings(kvstore_chaos_gate_test)
+kvstore_apply_sanitizers(kvstore_chaos_gate_test)
+add_test(NAME kvstore_chaos_gate_test COMMAND kvstore_chaos_gate_test failover)
+
+add_executable(kvstore_integrity_gate_test integrity_gate_test.cpp)
+target_link_libraries(kvstore_integrity_gate_test PRIVATE kvstore_core)
+kvstore_apply_compiler_warnings(kvstore_integrity_gate_test)
+kvstore_apply_sanitizers(kvstore_integrity_gate_test)
+add_test(
+  NAME kvstore_integrity_gate_test
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/integrity/run_corruption_suite.py
+          --repo-root ${CMAKE_SOURCE_DIR}
+          --build-dir ${CMAKE_BINARY_DIR}
+)
+
+add_executable(kvstore_bench_gate_test bench_gate_test.cpp)
+target_link_libraries(kvstore_bench_gate_test PRIVATE kvstore_service)
+kvstore_apply_compiler_warnings(kvstore_bench_gate_test)
+kvstore_apply_sanitizers(kvstore_bench_gate_test)
+add_test(NAME kvstore_bench_gate_test COMMAND kvstore_bench_gate_test)
