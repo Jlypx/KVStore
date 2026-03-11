@@ -6,4 +6,7 @@ BUILD_DIR="${ROOT_DIR}/build"
 
 cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "${BUILD_DIR}" -j
-ctest --test-dir "${BUILD_DIR}" --output-on-failure
+(
+  cd "${BUILD_DIR}"
+  ctest --output-on-failure
+)
