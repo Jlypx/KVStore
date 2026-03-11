@@ -8,6 +8,7 @@ in docs/storage-format.md.
 from __future__ import annotations
 
 import argparse
+import json
 import struct
 from pathlib import Path
 
@@ -37,6 +38,11 @@ def parse_args() -> argparse.Namespace:
         type=lambda s: int(s, 0),
         default=0x01,
         help="XOR mask to apply to the target byte (default: 0x01)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON output",
     )
     return parser.parse_args()
 
@@ -115,16 +121,30 @@ def main() -> int:
         handle.write(mutated)
         handle.flush()
 
-    print(
-        "corrupted sst={} block_index={} offset_in_block={} file_offset={} before=0x{:02x} after=0x{:02x}".format(
-            sst_path,
-            args.block_index,
-            args.offset_in_block,
-            target,
-            original[0],
-            mutated[0],
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "sst": str(sst_path),
+                    "block_index": args.block_index,
+                    "offset_in_block": args.offset_in_block,
+                    "file_offset": target,
+                    "before": original[0],
+                    "after": mutated[0],
+                }
+            )
         )
-    )
+    else:
+        print(
+            "corrupted sst={} block_index={} offset_in_block={} file_offset={} before=0x{:02x} after=0x{:02x}".format(
+                sst_path,
+                args.block_index,
+                args.offset_in_block,
+                target,
+                original[0],
+                mutated[0],
+            )
+        )
     return 0
 
 
