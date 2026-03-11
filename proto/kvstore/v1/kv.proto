@@ -32,6 +32,7 @@ message GetResponse {
 
 message DeleteRequest {
   bytes key = 1;
+  string request_id = 2;
 }
 
 message DeleteResponse {

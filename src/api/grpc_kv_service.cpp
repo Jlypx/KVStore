@@ -1,6 +1,5 @@
 #include "kvstore/api/grpc_kv_service.h"
 
-#include <atomic>
 #include <chrono>
 #include <string>
 
@@ -80,11 +79,7 @@ auto GrpcKvService::Delete(grpc::ServerContext* context,
                            const kvstore::v1::DeleteRequest* request,
                            kvstore::v1::DeleteResponse* response) -> grpc::Status {
   const auto deadline = DeadlineFromContext(context);
-  // v1 DeleteRequest has no request_id; generate a per-call id for engine/WAL.
-  static std::atomic<std::uint64_t> seq{1};
-  const std::string request_id = "delete-" + std::to_string(seq.fetch_add(1));
-
-  const auto res = svc_->Delete(request->key(), request_id, deadline);
+  const auto res = svc_->Delete(request->key(), request->request_id(), deadline);
   if (std::holds_alternative<kvstore::service::Error>(res)) {
     return ToGrpcStatus(std::get<kvstore::service::Error>(res));
   }

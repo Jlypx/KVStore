@@ -108,6 +108,7 @@ auto TestPutGetDelete() -> bool {
   {
     kvstore::v1::DeleteRequest req;
     req.set_key("k1");
+    req.set_request_id("del-req-1");
     kvstore::v1::DeleteResponse resp;
     grpc::ClientContext ctx;
     const auto st = stub->Delete(&ctx, req, &resp);
