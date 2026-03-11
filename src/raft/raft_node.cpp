@@ -140,6 +140,8 @@ auto RaftNode::BecomeLeader() -> void {
   leader_id_ = config_.node_id;
   votes_granted_ = 0;
 
+  log_.push_back(LogEntry{.term = current_term_, .command = ""});
+
   next_index_.clear();
   match_index_.clear();
   last_contact_tick_.clear();
