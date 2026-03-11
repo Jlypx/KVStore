@@ -13,8 +13,8 @@
 
 #include "kvstore/engine/kv_engine.h"
 #include "kvstore/integrity/crc32c.h"
+#include "kvstore/raft/cluster_runtime.h"
 #include "kvstore/raft/raft_node.h"
-#include "kvstore/raft/test_transport.h"
 
 namespace kvstore::service {
 namespace {
@@ -160,7 +160,7 @@ struct KvRaftService::Impl {
   RaftOptions options_;
 
   mutable std::mutex mu;
-  std::unique_ptr<kvstore::raft::TestCluster> cluster;
+  std::unique_ptr<kvstore::raft::RaftCluster> cluster;
 
   struct NodeState {
     std::unique_ptr<kvstore::engine::KvEngine> engine;
@@ -203,14 +203,14 @@ struct KvRaftService::Impl {
       return false;
     }
 
-    kvstore::raft::TestCluster::Options ro;
+    kvstore::raft::EmbeddedClusterOptions ro;
     ro.node_ids = options_.node_ids;
     ro.election_timeout_min_ticks = options_.election_timeout_min_ticks;
     ro.election_timeout_max_ticks = options_.election_timeout_max_ticks;
     ro.heartbeat_interval_ticks = options_.heartbeat_interval_ticks;
     ro.quorum_timeout_ticks = options_.quorum_timeout_ticks;
 
-    cluster = std::make_unique<kvstore::raft::TestCluster>(ro);
+    cluster = kvstore::raft::CreateEmbeddedRaftCluster(ro);
 
     for (kvstore::raft::NodeId id : options_.node_ids) {
       auto node_dir = data_dir_ / ("node" + std::to_string(id));

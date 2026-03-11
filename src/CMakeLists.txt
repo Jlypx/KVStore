@@ -47,10 +47,10 @@ if(KVSTORE_ENABLE_GRPC)
       "${KVSTORE_GEN_DIR}/kvstore/v1/kv.grpc.pb.cc"
     COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${_proto_ld_path}:$ENV{LD_LIBRARY_PATH}"
       "${KVSTORE_PROTOC_BIN}"
-      --proto_path="${PROJECT_SOURCE_DIR}/proto"
-      --cpp_out="${KVSTORE_GEN_DIR}"
-      --grpc_out="${KVSTORE_GEN_DIR}"
-      --plugin=protoc-gen-grpc="${KVSTORE_GRPC_CPP_PLUGIN_BIN}"
+      --proto_path=${PROJECT_SOURCE_DIR}/proto
+      --cpp_out=${KVSTORE_GEN_DIR}
+      --grpc_out=${KVSTORE_GEN_DIR}
+      --plugin=protoc-gen-grpc=${KVSTORE_GRPC_CPP_PLUGIN_BIN}
       "${KVSTORE_KV_PROTO}"
     DEPENDS "${KVSTORE_KV_PROTO}"
     COMMENT "Generating C++ protobuf + gRPC stubs for kv.proto"
@@ -71,6 +71,7 @@ if(KVSTORE_ENABLE_GRPC)
   endif()
 
   add_library(kvstore_service
+    raft/cluster_runtime.cpp
     service/kv_raft_service.cpp
     raft/test_transport.cpp
   )
