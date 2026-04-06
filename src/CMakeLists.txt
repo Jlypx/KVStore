@@ -27,6 +27,7 @@ if(KVSTORE_ENABLE_GRPC)
   kvstore_bootstrap_proto_tools()
 
   set(KVSTORE_KV_PROTO "${PROJECT_SOURCE_DIR}/proto/kvstore/v1/kv.proto")
+  set(KVSTORE_RAFT_PROTO "${PROJECT_SOURCE_DIR}/proto/kvstore/v1/raft.proto")
   set(KVSTORE_GEN_DIR "${PROJECT_BINARY_DIR}/gen")
 
   file(MAKE_DIRECTORY "${KVSTORE_GEN_DIR}")
@@ -46,6 +47,10 @@ if(KVSTORE_ENABLE_GRPC)
       "${KVSTORE_GEN_DIR}/kvstore/v1/kv.pb.cc"
       "${KVSTORE_GEN_DIR}/kvstore/v1/kv.grpc.pb.h"
       "${KVSTORE_GEN_DIR}/kvstore/v1/kv.grpc.pb.cc"
+      "${KVSTORE_GEN_DIR}/kvstore/v1/raft.pb.h"
+      "${KVSTORE_GEN_DIR}/kvstore/v1/raft.pb.cc"
+      "${KVSTORE_GEN_DIR}/kvstore/v1/raft.grpc.pb.h"
+      "${KVSTORE_GEN_DIR}/kvstore/v1/raft.grpc.pb.cc"
     COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${_proto_ld_path}:$ENV{LD_LIBRARY_PATH}"
       "${KVSTORE_PROTOC_BIN}"
       --proto_path=${PROJECT_SOURCE_DIR}/proto
@@ -53,7 +58,8 @@ if(KVSTORE_ENABLE_GRPC)
       --grpc_out=${KVSTORE_GEN_DIR}
       --plugin=protoc-gen-grpc=${KVSTORE_GRPC_CPP_PLUGIN_BIN}
       "${KVSTORE_KV_PROTO}"
-    DEPENDS "${KVSTORE_KV_PROTO}"
+      "${KVSTORE_RAFT_PROTO}"
+    DEPENDS "${KVSTORE_KV_PROTO}" "${KVSTORE_RAFT_PROTO}"
     COMMENT "Generating C++ protobuf + gRPC stubs for kv.proto"
     VERBATIM
   )
@@ -70,6 +76,26 @@ if(KVSTORE_ENABLE_GRPC)
   if(NOT MSVC)
     target_compile_options(kvstore_kv_proto PRIVATE -Wno-unused-parameter)
   endif()
+
+  add_library(kvstore_raft_proto
+    "${KVSTORE_GEN_DIR}/kvstore/v1/raft.pb.cc"
+    "${KVSTORE_GEN_DIR}/kvstore/v1/raft.grpc.pb.cc"
+  )
+  target_include_directories(kvstore_raft_proto PUBLIC
+    "${KVSTORE_GEN_DIR}"
+  )
+  target_link_libraries(kvstore_raft_proto PUBLIC kvstore_grpc_runtime)
+  if(NOT MSVC)
+    target_compile_options(kvstore_raft_proto PRIVATE -Wno-unused-parameter)
+  endif()
+
+  add_library(kvstore_raft_transport
+    raft/raft_proto_conversion.cpp
+  )
+  target_include_directories(kvstore_raft_transport PUBLIC ${PROJECT_SOURCE_DIR}/include)
+  target_link_libraries(kvstore_raft_transport PUBLIC kvstore_core kvstore_raft_proto)
+  kvstore_apply_compiler_warnings(kvstore_raft_transport)
+  kvstore_apply_sanitizers(kvstore_raft_transport)
 
   add_library(kvstore_service
     raft/cluster_runtime.cpp

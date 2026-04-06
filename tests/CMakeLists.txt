@@ -95,3 +95,11 @@ target_link_libraries(kvstore_raft_persistence_test PRIVATE kvstore_raft_test_su
 kvstore_apply_compiler_warnings(kvstore_raft_persistence_test)
 kvstore_apply_sanitizers(kvstore_raft_persistence_test)
 add_test(NAME kvstore_raft_persistence_test COMMAND kvstore_raft_persistence_test)
+
+if(KVSTORE_ENABLE_GRPC)
+  add_executable(kvstore_raft_peer_proto_test raft_peer_proto_test.cpp)
+  target_link_libraries(kvstore_raft_peer_proto_test PRIVATE kvstore_raft_transport)
+  kvstore_apply_compiler_warnings(kvstore_raft_peer_proto_test)
+  kvstore_apply_sanitizers(kvstore_raft_peer_proto_test)
+  add_test(NAME kvstore_raft_peer_proto_test COMMAND kvstore_raft_peer_proto_test)
+endif()
