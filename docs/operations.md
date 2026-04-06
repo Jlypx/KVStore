@@ -9,16 +9,20 @@ It does not claim deployment assets or runtime capabilities that are not present
 ## Runtime model in v1
 
 `kvd` is the only server entry point in the current repository, `src/bin/kvd.cpp`.
-One `kvd` process exposes one client-facing gRPC endpoint and constructs `kvstore::service::KvRaftService` over a static in-process five-node Raft cluster.
-Those five logical nodes are embedded through `TestCluster` and `TestTransport`, not as five separate OS processes and not as a separate peer network, `docs/architecture.md`, `src/service/kv_raft_service.cpp`.
+It now supports two modes:
+
+- `--mode=embedded`, which preserves the original in-process five-node topology
+- `--mode=cluster-node`, which starts one real node process with separate client and peer listeners
 
 Current operator-facing flags are exactly:
 
+- `--mode=embedded|cluster-node`
 - `--listen_addr=`
 - `--data_dir=`
 - `--tls_profile=dev|secure`
 - `--tls_cert=`
 - `--tls_key=`
+- `--config=`
 
 Current listener behavior from `src/bin/kvd.cpp`:
 
@@ -28,12 +32,20 @@ Current listener behavior from `src/bin/kvd.cpp`:
 - `--tls_profile=dev` uses plaintext gRPC over TCP
 - `--tls_profile=secure` requires both `--tls_cert=` and `--tls_key=` or startup fails with exit code `1`
 
-This is the v1 runtime topology to keep in mind during operations:
+This is the `embedded` topology:
 
 - one process
 - one external gRPC listener
 - five static voting Raft nodes embedded in that process
 - one local storage subtree per logical node under `data_dir/node*`
+
+This is the `cluster-node` topology:
+
+- five `kvd --mode=cluster-node` processes on one host
+- one client listener per node
+- one peer listener per node
+- static five-node peer membership from config
+- one local engine and one local Raft state directory per process
 
 ## Build and start prerequisites
 
@@ -60,10 +72,11 @@ That baseline comes directly from `scripts/ci/local_check.sh`.
 
 ## Startup commands, dev/plaintext and secure/TLS
 
-### Development or plaintext listener
+### Development or plaintext listener, embedded mode
 
 ```bash
 ./build/src/kvd \
+  --mode=embedded \
   --listen_addr=127.0.0.1:50051 \
   --data_dir=./data \
   --tls_profile=dev
@@ -72,10 +85,11 @@ That baseline comes directly from `scripts/ci/local_check.sh`.
 Use this mode when you want the default local listener profile and do not need TLS on the client-facing endpoint.
 This is the default profile in `src/bin/kvd.cpp` and the form shown in `deploy/kvd_single_process.conf`.
 
-### Secure TLS listener
+### Secure TLS listener, embedded mode
 
 ```bash
 ./build/src/kvd \
+  --mode=embedded \
   --listen_addr=127.0.0.1:50051 \
   --data_dir=./data \
   --tls_profile=secure \
@@ -87,6 +101,14 @@ Use this mode when you want TLS on the client-facing gRPC endpoint.
 `src/bin/kvd.cpp` reads both PEM files at startup. If either file is missing or unreadable, startup fails before the server begins listening.
 
 Task 7 external smoke evidence used the same secure profile shape with repository test certificates, `.sisyphus/evidence/task7-final/chaos_partition_heal_and_tls.json`.
+
+### Same-host five-node cluster
+
+```bash
+bash scripts/cluster/start_local_cluster.sh --build-dir build
+```
+
+This uses `deploy/kvd_cluster_node_1.toml` through `deploy/kvd_cluster_node_5.toml` and starts five real node processes on one host.
 
 ## Data directory layout and persistence assumptions
 
@@ -108,7 +130,8 @@ Operational assumptions for persistence in the current v1 tree:
 - restarting `kvd` against the same `--data_dir=` reuses the existing local state
 - deleting or replacing `--data_dir=` resets the embedded cluster's persisted state
 
-There is no runtime support for remote shared storage, dynamic membership rebalancing, or multi-process cluster orchestration in the current repository.
+There is still no runtime support for remote shared storage or dynamic membership reconfiguration.
+Same-host multi-process orchestration is now available only through the repository's local launcher scripts.
 
 ## Operational checks and expected startup output
 

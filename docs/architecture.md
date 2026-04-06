@@ -15,7 +15,12 @@ It does not widen scope beyond `docs/architecture/scope.md`.
 - Storage core: each Raft node owns a `kvstore::engine::KvEngine` backed by a WAL, memtable, SST files, compaction, and block cache.
 - Integrity core: `src/integrity/crc32c.cpp`, `src/engine/wal.cpp`, and `src/engine/sstable.cpp` verify checksums on replay and read paths.
 
-The current implementation is a single `kvd` process that embeds a static five-node Raft cluster through `kvstore::raft::TestCluster` in `src/raft/test_transport.cpp`. Each logical node persists data under `data_dir/node{n}/` and participates in the same in-process replication flow.
+The repository now supports two runtime forms:
+
+- `embedded` mode, which keeps the original single `kvd` process with an embedded static five-node cluster through `kvstore::raft::TestCluster` in `src/raft/test_transport.cpp`
+- `cluster-node` mode, where one `kvd` process represents one real node and communicates with peers over a dedicated internal gRPC service defined in `proto/kvstore/v1/raft.proto`
+
+In `cluster-node` mode, each node persists only its own engine and Raft state under its configured `data_dir`.
 
 ## Node and Service Architecture
 
@@ -32,6 +37,13 @@ The current implementation is a single `kvd` process that embeds a static five-n
 - Each logical node has its own `KvEngine` instance and storage directory.
 - A background ticker drives Raft time, elections, heartbeat emission, message delivery, and commit callbacks.
 
+### Cluster-node runtime
+
+- `kvd --mode=cluster-node --config=...` starts one real node process.
+- Each node exposes one client-facing gRPC listener and one peer-only gRPC listener.
+- Peer traffic uses `kvstore.v1.RaftPeer` from `proto/kvstore/v1/raft.proto`.
+- `NetworkTransport` sends Raft RPCs across processes, while `InProcessTransport` remains available for embedded tests.
+
 ### Read and write semantics
 
 - `Put` and `Delete` are accepted only through the current leader and only while quorum contact is present.
@@ -44,7 +56,7 @@ The current implementation is a single `kvd` process that embeds a static five-n
 |---|---|---|
 | `api` | Protobuf surface and gRPC status translation only | `proto/kvstore/v1/kv.proto`, `src/api/grpc_kv_service.cpp` |
 | `service` | Request validation, idempotency, leader routing, orchestration | `src/service/kv_raft_service.cpp` |
-| `raft` | Election, replication, quorum checks, deterministic transport | `src/raft/raft_node.cpp`, `src/raft/test_transport.cpp` |
+| `raft` | Election, replication, quorum checks, durable Raft state, in-process and network transport | `src/raft/raft_node.cpp`, `src/raft/test_transport.cpp`, `src/raft/network_transport.cpp`, `src/raft/raft_storage.cpp` |
 | `engine` | WAL, memtable, SST read/write, compaction, per-node state machine storage | `src/engine/kv_engine.cpp`, `src/engine/wal.cpp`, `src/engine/sstable.cpp`, `src/engine/compaction.cpp` |
 | `cache` | SST block cache for repeated reads | `src/cache/block_cache.cpp` |
 | `integrity` | CRC32C checksum generation and verification, integrity error propagation | `src/integrity/crc32c.cpp`, `src/engine/wal.cpp`, `src/engine/sstable.cpp` |

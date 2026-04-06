@@ -8,12 +8,13 @@ It does not claim CI jobs, distributed infra, Jepsen coverage, dynamic membershi
 
 ## Test layers / strategy
 
-The current validation stack has two layers.
+The current validation stack now has three layers.
 
 | Layer | Scope | Main artifacts | What it proves |
 |---|---|---|---|
 | Deterministic unit and integration style | In-process binaries against `TestCluster`, `KvRaftService`, storage readers, and gRPC adapters | `tests/raft_failover_test.cpp`, `tests/integration/chaos_gate_test.cpp`, `tests/integration/integrity_gate_test.cpp`, `tests/integration/bench_gate_test.cpp`, `tests/grpc/api_status_test.cpp`, `tests/grpc/grpc_integration_test.cpp`, `tests/grpc/grpc_idempotency_test.cpp`, `tests/grpc/tls_profile_toggle_test.cpp` | Logical correctness, failure handling, checksum enforcement, status mapping, and transport profile semantics in a repeatable local process |
 | WSL and runtime smoke style | Real `kvd` process plus external client smoke wrappers and evidence capture scripts | `scripts/chaos/partition_heal_check.py`, `scripts/chaos/kill_leader_and_assert.py`, `scripts/chaos/assert_restart_rto.py`, `scripts/integrity/run_corruption_suite.py`, `scripts/bench/run_baseline.sh`, `scripts/bench/assert_slo.py` | That the built binaries run end to end in the current environment, emit machine-readable evidence, and preserve the same behavior when exercised through the shipped runtime entry points |
+| Same-host multi-process cluster | Five real `kvd --mode=cluster-node` processes on loopback with peer gRPC | `tests/integration/multi_process_cluster_test.cpp`, `scripts/cluster/start_local_cluster.sh`, `scripts/cluster/stop_local_cluster.sh` | That leader election, redirection, replication, and failover also work across real processes rather than only in the embedded transport |
 
 The important split is that most correctness and storage checks are deterministic and in-process, while the Task 7 transport and profile checks are runtime smoke checks that explicitly run through WSL-facing paths and external client connections.
 
@@ -185,4 +186,4 @@ The current validation story is strong for implemented v1 behavior, but it has c
 - The benchmark gate is a local-process acceptance check, not a production capacity model.
 - TLS coverage is limited to the client-facing listener profiles `dev` and `secure`. It does not imply a separate TLS-protected inter-node transport.
 
-Those omissions are intentional for the current v1 boundary and should be treated as deferred work, not as hidden guarantees.
+Those omissions are intentional for the current v1 boundary and should be treated as deferred work, not as hidden guarantees. The new same-host multi-process cluster coverage closes the previous gap where all Raft validation depended on an embedded transport, but it is still not the same as cross-machine distributed validation.

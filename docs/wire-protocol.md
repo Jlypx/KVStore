@@ -6,6 +6,8 @@ This document describes the client-visible wire contract for the current `kvstor
 
 This is a unary-only contract. v1 exposes `Put`, `Get`, and `Delete` only. It does not expose `Txn`, `Watch`, `Lease`, `RangeScan`, or any streaming RPCs on the wire.
 
+The repository now also contains an internal peer gRPC protocol in `proto/kvstore/v1/raft.proto`, but that is a node-to-node transport contract, not part of the public client API described in this document.
+
 ## Service and RPC inventory
 
 Source of truth: `proto/kvstore/v1/kv.proto:8-39`.
