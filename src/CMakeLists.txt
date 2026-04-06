@@ -110,11 +110,12 @@ if(KVSTORE_ENABLE_GRPC)
 
   add_library(kvstore_service
     raft/cluster_runtime.cpp
+    service/cluster_node_service.cpp
     service/kv_raft_service.cpp
     raft/test_transport.cpp
   )
   find_package(Threads REQUIRED)
-  target_link_libraries(kvstore_service PUBLIC kvstore_core Threads::Threads)
+  target_link_libraries(kvstore_service PUBLIC kvstore_core kvstore_raft_transport Threads::Threads)
   target_include_directories(kvstore_service PUBLIC ${PROJECT_SOURCE_DIR}/include)
   kvstore_apply_compiler_warnings(kvstore_service)
   kvstore_apply_sanitizers(kvstore_service)
@@ -130,7 +131,7 @@ if(KVSTORE_ENABLE_GRPC)
   add_executable(kvd
     bin/kvd.cpp
   )
-  target_link_libraries(kvd PRIVATE kvstore_api)
+  target_link_libraries(kvd PRIVATE kvstore_api kvstore_peer_service)
   if(NOT MSVC)
     target_link_options(kvd PRIVATE -Wl,--disable-new-dtags)
   endif()

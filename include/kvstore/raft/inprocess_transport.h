@@ -10,7 +10,7 @@
 
 namespace kvstore::raft {
 
-class InProcessTransport final : public RaftTransport {
+class InProcessTransport : public RaftTransport {
  public:
   auto RegisterNode(NodeId id, MessageHandler handler) -> void override;
 

@@ -15,7 +15,7 @@ auto ToGrpcStatus(const kvstore::service::Error& e) -> grpc::Status;
 
 class GrpcKvService final : public kvstore::v1::KV::Service {
  public:
-  explicit GrpcKvService(std::shared_ptr<kvstore::service::KvRaftService> svc)
+  explicit GrpcKvService(std::shared_ptr<kvstore::service::KvService> svc)
       : svc_(std::move(svc)) {}
 
   auto Put(grpc::ServerContext* context,
@@ -31,7 +31,7 @@ class GrpcKvService final : public kvstore::v1::KV::Service {
               kvstore::v1::DeleteResponse* response) -> grpc::Status override;
 
  private:
-  std::shared_ptr<kvstore::service::KvRaftService> svc_;
+  std::shared_ptr<kvstore::service::KvService> svc_;
 };
 
 }  // namespace kvstore::api

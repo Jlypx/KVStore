@@ -58,7 +58,25 @@ struct RaftOptions {
 // - Majority commit triggers RaftNode::on_committed callbacks.
 // - Committed commands are applied to a per-node KvEngine.
 // - Put/Delete are retry-safe via request_id at the service boundary.
-class KvRaftService {
+class KvService {
+ public:
+  virtual ~KvService() = default;
+
+  virtual auto Put(const std::string& key,
+                   const std::string& value,
+                   const std::string& request_id,
+                   std::chrono::steady_clock::time_point deadline)
+      -> Result<PutResult> = 0;
+
+  virtual auto Get(const std::string& key) -> Result<GetResult> = 0;
+
+  virtual auto Delete(const std::string& key,
+                      const std::string& request_id,
+                      std::chrono::steady_clock::time_point deadline)
+      -> Result<DeleteResult> = 0;
+};
+
+class KvRaftService : public KvService {
  public:
   KvRaftService(std::filesystem::path data_dir, RaftOptions options);
   ~KvRaftService();
@@ -70,14 +88,14 @@ class KvRaftService {
            const std::string& value,
            const std::string& request_id,
            std::chrono::steady_clock::time_point deadline)
-      -> Result<PutResult>;
+      -> Result<PutResult> override;
 
-  auto Get(const std::string& key) -> Result<GetResult>;
+  auto Get(const std::string& key) -> Result<GetResult> override;
 
   auto Delete(const std::string& key,
               const std::string& request_id,
               std::chrono::steady_clock::time_point deadline)
-      -> Result<DeleteResult>;
+      -> Result<DeleteResult> override;
 
   // Test hooks.
   auto SetNodeUp(kvstore::raft::NodeId id, bool up) -> void;
