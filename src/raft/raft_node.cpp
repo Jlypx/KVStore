@@ -39,7 +39,19 @@ RaftNode::RaftNode(RaftNodeConfig config, SendFn send)
     }
   }
 
-  log_.push_back(LogEntry{.term = 0, .command = ""});
+  if (!config_.storage_dir.empty()) {
+    storage_ = std::make_unique<RaftStorage>(config_.storage_dir);
+    PersistentRaftState persisted;
+    if (storage_->Load(&persisted)) {
+      current_term_ = persisted.current_term;
+      voted_for_ = persisted.voted_for;
+      log_ = std::move(persisted.log);
+    }
+  }
+
+  if (log_.empty()) {
+    log_.push_back(LogEntry{.term = 0, .command = ""});
+  }
   ResetElectionTimeout();
 }
 
@@ -111,6 +123,7 @@ auto RaftNode::BecomeFollower(Term term, NodeId leader) -> void {
   leader_id_ = leader;
   votes_granted_ = 0;
   heartbeat_elapsed_ = 0;
+  PersistMetadata();
   ResetElectionTimeout();
 }
 
@@ -120,6 +133,7 @@ auto RaftNode::StartElection() -> void {
   current_term_ += 1;
   voted_for_ = config_.node_id;
   votes_granted_ = 1;
+  PersistMetadata();
   ResetElectionTimeout();
 
   const auto last_index = last_log_index();
@@ -141,6 +155,7 @@ auto RaftNode::BecomeLeader() -> void {
   votes_granted_ = 0;
 
   log_.push_back(LogEntry{.term = current_term_, .command = ""});
+  PersistLog();
 
   next_index_.clear();
   match_index_.clear();
@@ -183,6 +198,7 @@ auto RaftNode::HandleRequestVote(NodeId from,
 
   if (grant) {
     voted_for_ = request.candidate_id;
+    PersistMetadata();
     election_elapsed_ = 0;
   }
 
@@ -251,10 +267,12 @@ auto RaftNode::HandleAppendEntries(NodeId from,
 
   LogIndex index = request.prev_log_index + 1;
   std::size_t entry_offset = 0;
+  bool log_changed = false;
   while (entry_offset < request.entries.size() && index <= last_log_index()) {
     const auto& entry = request.entries[entry_offset];
     if (log_[static_cast<std::size_t>(index)].term != entry.term) {
       log_.resize(static_cast<std::size_t>(index));
+      log_changed = true;
       break;
     }
     index += 1;
@@ -264,6 +282,11 @@ auto RaftNode::HandleAppendEntries(NodeId from,
   while (entry_offset < request.entries.size()) {
     log_.push_back(request.entries[entry_offset]);
     entry_offset += 1;
+    log_changed = true;
+  }
+
+  if (log_changed) {
+    PersistLog();
   }
 
   if (request.leader_commit > commit_index_) {
@@ -452,6 +475,7 @@ auto RaftNode::Propose(std::string command) -> ProposeResult {
   }
 
   log_.push_back(LogEntry{.term = current_term_, .command = std::move(command)});
+  PersistLog();
   result.index = last_log_index();
   result.status = ProposeStatus::kOk;
 
@@ -460,6 +484,18 @@ auto RaftNode::Propose(std::string command) -> ProposeResult {
   }
 
   return result;
+}
+
+auto RaftNode::PersistMetadata() -> void {
+  if (storage_) {
+    storage_->StoreMetadata(current_term_, voted_for_);
+  }
+}
+
+auto RaftNode::PersistLog() -> void {
+  if (storage_) {
+    storage_->StoreLog(log_);
+  }
 }
 
 }  // namespace kvstore::raft

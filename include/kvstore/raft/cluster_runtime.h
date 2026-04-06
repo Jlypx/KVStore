@@ -1,6 +1,7 @@
 #ifndef KVSTORE_RAFT_CLUSTER_RUNTIME_H
 #define KVSTORE_RAFT_CLUSTER_RUNTIME_H
 
+#include <filesystem>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -19,6 +20,7 @@ struct EmbeddedClusterOptions {
   std::uint64_t election_timeout_max_ticks = 20;
   std::uint64_t heartbeat_interval_ticks = 2;
   std::uint64_t quorum_timeout_ticks = 0;
+  std::filesystem::path storage_root;
 };
 
 class RaftCluster {

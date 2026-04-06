@@ -209,6 +209,7 @@ struct KvRaftService::Impl {
     ro.election_timeout_max_ticks = options_.election_timeout_max_ticks;
     ro.heartbeat_interval_ticks = options_.heartbeat_interval_ticks;
     ro.quorum_timeout_ticks = options_.quorum_timeout_ticks;
+    ro.storage_root = data_dir_;
 
     cluster = kvstore::raft::CreateEmbeddedRaftCluster(ro);
 

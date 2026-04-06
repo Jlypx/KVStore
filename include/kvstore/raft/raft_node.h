@@ -1,9 +1,11 @@
 #ifndef KVSTORE_RAFT_RAFT_NODE_H
 #define KVSTORE_RAFT_RAFT_NODE_H
 
+#include <filesystem>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <random>
 #include <string>
@@ -12,6 +14,7 @@
 #include <vector>
 
 #include "kvstore/raft/raft_types.h"
+#include "kvstore/raft/raft_storage.h"
 
 namespace kvstore::raft {
 
@@ -27,6 +30,7 @@ struct RaftNodeConfig {
   std::uint64_t quorum_timeout_ticks = 0;
 
   std::uint32_t random_seed = 0;
+  std::filesystem::path storage_dir;
 };
 
 struct SnapshotHooks {
@@ -61,6 +65,7 @@ class RaftNode {
   [[nodiscard]] auto role() const -> Role { return role_; }
   [[nodiscard]] auto current_term() const -> Term { return current_term_; }
   [[nodiscard]] auto leader_id() const -> NodeId { return leader_id_; }
+  [[nodiscard]] auto voted_for() const -> NodeId { return voted_for_; }
   [[nodiscard]] auto committed_index() const -> LogIndex { return commit_index_; }
   [[nodiscard]] auto last_applied_index() const -> LogIndex {
     return last_applied_;
@@ -109,6 +114,8 @@ class RaftNode {
   auto LeaderBroadcastHeartbeats() -> void;
   auto AdvanceCommitIndex() -> void;
   auto ApplyCommitted() -> void;
+  auto PersistMetadata() -> void;
+  auto PersistLog() -> void;
 
   RaftNodeConfig config_;
   std::vector<NodeId> peers_;
@@ -140,6 +147,7 @@ class RaftNode {
   std::unordered_map<NodeId, std::uint64_t> last_contact_tick_;
 
   std::mt19937 rng_;
+  std::unique_ptr<RaftStorage> storage_;
 };
 
 }  // namespace kvstore::raft

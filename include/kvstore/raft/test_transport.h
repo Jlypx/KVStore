@@ -1,6 +1,7 @@
 #ifndef KVSTORE_RAFT_TEST_TRANSPORT_H
 #define KVSTORE_RAFT_TEST_TRANSPORT_H
 
+#include <filesystem>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -52,6 +53,7 @@ class TestCluster {
     std::uint64_t election_timeout_max_ticks = 20;
     std::uint64_t heartbeat_interval_ticks = 2;
     std::uint64_t quorum_timeout_ticks = 0;
+    std::filesystem::path storage_root;
   };
 
   explicit TestCluster(Options options);

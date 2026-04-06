@@ -64,7 +64,9 @@ auto TestTransport::DeliverAll() -> std::size_t {
   return DeliverSome(kMax);
 }
 
-TestCluster::TestCluster() : TestCluster(Options{.node_ids = DefaultNodeIds()}) {}
+TestCluster::TestCluster()
+    : TestCluster(Options{.node_ids = DefaultNodeIds(),
+                          .storage_root = std::filesystem::path{}}) {}
 
 TestCluster::TestCluster(Options options) : options_(std::move(options)) {
   if (options_.node_ids.empty()) {
@@ -81,6 +83,10 @@ TestCluster::TestCluster(Options options) : options_(std::move(options)) {
     config.heartbeat_interval_ticks = options_.heartbeat_interval_ticks;
     config.quorum_timeout_ticks = options_.quorum_timeout_ticks;
     config.random_seed = static_cast<std::uint32_t>(id * 97U + 3U);
+    if (!options_.storage_root.empty()) {
+      config.storage_dir =
+          options_.storage_root / ("node" + std::to_string(id)) / "raft";
+    }
 
     auto sender = [this](Message message) { transport_.Send(std::move(message)); };
     nodes_.push_back(std::make_unique<RaftNode>(std::move(config), sender));

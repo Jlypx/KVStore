@@ -2,6 +2,7 @@ add_library(
   kvstore_core
   smoke.cpp
   raft/raft_node.cpp
+  raft/raft_storage.cpp
   engine/memtable.cpp
   engine/wal.cpp
   engine/kv_engine.cpp

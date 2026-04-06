@@ -15,6 +15,7 @@ auto ToTestClusterOptions(EmbeddedClusterOptions options) -> TestCluster::Option
   out.election_timeout_max_ticks = options.election_timeout_max_ticks;
   out.heartbeat_interval_ticks = options.heartbeat_interval_ticks;
   out.quorum_timeout_ticks = options.quorum_timeout_ticks;
+  out.storage_root = std::move(options.storage_root);
   return out;
 }
 
