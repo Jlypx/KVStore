@@ -4,6 +4,7 @@ add_library(
   raft/raft_node.cpp
   raft/raft_storage.cpp
   raft/inprocess_transport.cpp
+  runtime/cluster_config.cpp
   engine/memtable.cpp
   engine/wal.cpp
   engine/kv_engine.cpp

@@ -1,0 +1,31 @@
+cluster_id = "kvstore-local-1"
+self_id = 5
+tls_profile = "dev"
+data_dir = "./data/node5"
+client_addr = "127.0.0.1:50055"
+peer_addr = "127.0.0.1:60055"
+
+[[nodes]]
+node_id = 1
+client_addr = "127.0.0.1:50051"
+peer_addr = "127.0.0.1:60051"
+
+[[nodes]]
+node_id = 2
+client_addr = "127.0.0.1:50052"
+peer_addr = "127.0.0.1:60052"
+
+[[nodes]]
+node_id = 3
+client_addr = "127.0.0.1:50053"
+peer_addr = "127.0.0.1:60053"
+
+[[nodes]]
+node_id = 4
+client_addr = "127.0.0.1:50054"
+peer_addr = "127.0.0.1:60054"
+
+[[nodes]]
+node_id = 5
+client_addr = "127.0.0.1:50055"
+peer_addr = "127.0.0.1:60055"
