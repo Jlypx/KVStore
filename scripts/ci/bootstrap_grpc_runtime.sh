@@ -20,6 +20,69 @@ else
   LOCAL_LIB_DIRS=("${USR_DIR}/lib/$(uname -m)-linux-gnu" "${USR_DIR}/lib")
 fi
 
+have_apt_package() {
+  apt-cache show "$1" >/dev/null 2>&1
+}
+
+resolve_exact_package() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -n "${candidate}" ]] && have_apt_package "${candidate}"; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_prefix_package() {
+  local prefix="$1"
+  local pattern="$2"
+  local selected=""
+  local candidate
+  while IFS= read -r candidate; do
+    if [[ "${candidate}" =~ ${pattern} ]] && have_apt_package "${candidate}"; then
+      selected="${candidate}"
+    fi
+  done < <(apt-cache pkgnames | awk -v pfx="${prefix}" 'index($0, pfx) == 1 { print $0 }' | sort -V)
+
+  if [[ -n "${selected}" ]]; then
+    echo "${selected}"
+    return 0
+  fi
+  return 1
+}
+
+resolve_package() {
+  local label="$1"
+  local prefix="$2"
+  local pattern="$3"
+  shift 3
+
+  local resolved=""
+  resolved="$(resolve_exact_package "$@" || true)"
+  if [[ -z "${resolved}" ]]; then
+    resolved="$(resolve_prefix_package "${prefix}" "${pattern}" || true)"
+  fi
+  if [[ -z "${resolved}" ]]; then
+    echo "[grpc-runtime] ERROR: unable to resolve ${label} package from apt metadata" >&2
+    return 1
+  fi
+  echo "${resolved}"
+}
+
+append_package() {
+  local pkg="$1"
+  if [[ -z "${pkg}" ]]; then
+    return 0
+  fi
+  if [[ -n "${KVSTORE_SEEN_PACKAGES[${pkg}]:-}" ]]; then
+    return 0
+  fi
+  packages+=("${pkg}")
+  KVSTORE_SEEN_PACKAGES["${pkg}"]=1
+}
+
 have_headers=false
 if [[ -f "${LOCAL_INCLUDE_DIR}/grpcpp/grpcpp.h" && -f "${LOCAL_INCLUDE_DIR}/google/protobuf/message.h" ]]; then
   have_headers=true
@@ -50,32 +113,50 @@ fi
 
 mkdir -p "${PACKAGES_DIR}" "${SYSROOT_DIR}"
 
-# Keep the list explicit for determinism (similar to bootstrap_proto_tools.sh).
-# We include both -dev and runtime packages so extracted sysroot can compile+link.
-packages=(
-  libgrpc++-dev
-  libgrpc++1
-  libgrpc-dev
-  libgrpc6
-  libprotobuf-dev
-  libprotobuf17
-  libc-ares-dev
-  libc-ares2
-  libre2-dev
-  libre2-5
-  zlib1g-dev
-  zlib1g
-  libssl-dev
-)
+declare -a packages=()
+declare -A KVSTORE_SEEN_PACKAGES=()
 
-# Distro variance: Ubuntu 22.04+ uses libssl3, older distros may use libssl1.1.
-if command -v apt-cache >/dev/null 2>&1; then
-  if apt-cache show libssl3 >/dev/null 2>&1; then
-    packages+=(libssl3)
-  elif apt-cache show libssl1.1 >/dev/null 2>&1; then
-    packages+=(libssl1.1)
-  fi
-fi
+# Keep the dev package list explicit, but resolve runtime soname packages
+# dynamically because ubuntu-latest periodically renames them (for example t64
+# transitions and newer protobuf/grpc ABI bumps).
+append_package "libgrpc++-dev"
+append_package "$(resolve_package \
+  "gRPC++ runtime" \
+  "libgrpc++" \
+  '^libgrpc\+\+[0-9][0-9.t]*$' \
+  libgrpc++1 libgrpc++1.51 libgrpc++1.51t64)"
+append_package "libgrpc-dev"
+append_package "$(resolve_package \
+  "gRPC runtime" \
+  "libgrpc" \
+  '^libgrpc[0-9][0-9.t]*$' \
+  libgrpc6 libgrpc29 libgrpc29t64)"
+append_package "libprotobuf-dev"
+append_package "$(resolve_package \
+  "protobuf runtime" \
+  "libprotobuf" \
+  '^libprotobuf[0-9][0-9.t]*$' \
+  libprotobuf17 libprotobuf23 libprotobuf25 libprotobuf32 libprotobuf32t64)"
+append_package "libc-ares-dev"
+append_package "$(resolve_package \
+  "c-ares runtime" \
+  "libc-ares" \
+  '^libc-ares[0-9][0-9.t-]*$' \
+  libc-ares2 libc-ares2t64)"
+append_package "libre2-dev"
+append_package "$(resolve_package \
+  "re2 runtime" \
+  "libre2-" \
+  '^libre2-[0-9][0-9.t-]*$' \
+  libre2-5 libre2-9 libre2-10 libre2-11)"
+append_package "zlib1g-dev"
+append_package "zlib1g"
+append_package "libssl-dev"
+append_package "$(resolve_package \
+  "OpenSSL runtime" \
+  "libssl" \
+  '^libssl[0-9.]+(t64)?$' \
+  libssl3 libssl3t64 libssl1.1)"
 
 (
   cd "${PACKAGES_DIR}"
