@@ -90,7 +90,13 @@ auto TestNetworkTransportRoundTrip() -> bool {
   };
   transport.Send(vote_message);
 
+  const auto vote_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!vote_response.has_value() &&
+         std::chrono::steady_clock::now() < vote_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
   if (!Expect(vote_response.has_value(), "vote response should be received")) {
+    server.server->Shutdown();
     return false;
   }
   const auto vote =
@@ -112,7 +118,14 @@ auto TestNetworkTransportRoundTrip() -> bool {
   };
   transport.Send(append_message);
 
+  const auto append_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!append_response.has_value() &&
+         std::chrono::steady_clock::now() < append_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
   if (!Expect(append_response.has_value(), "append response should be received")) {
+    server.server->Shutdown();
     return false;
   }
   const auto append =

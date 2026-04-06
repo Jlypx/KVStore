@@ -2,6 +2,8 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include <thread>
+
 #include "kvstore/raft/raft_proto_conversion.h"
 #include "kvstore/v1/raft.grpc.pb.h"
 
@@ -31,61 +33,54 @@ auto NetworkTransport::IsNodeUp(NodeId id) const -> bool {
   return it->second;
 }
 
-auto NetworkTransport::GetOrCreateStub(NodeId id) -> kvstore::v1::RaftPeer::Stub* {
-  const auto found = stubs_.find(id);
-  if (found != stubs_.end()) {
-    return found->second.get();
-  }
-  const auto addr_it = peer_addrs_.find(id);
-  if (addr_it == peer_addrs_.end()) {
-    return nullptr;
-  }
-  auto channel = grpc::CreateChannel(addr_it->second, grpc::InsecureChannelCredentials());
-  auto stub = kvstore::v1::RaftPeer::NewStub(channel);
-  auto* out = stub.get();
-  stubs_.emplace(id, std::move(stub));
-  return out;
-}
-
 auto NetworkTransport::Send(Message message) -> void {
   if (!IsNodeUp(message.to)) {
     return;
   }
-  auto* stub = GetOrCreateStub(message.to);
-  if (stub == nullptr || !receive_handler_) {
+  const auto addr_it = peer_addrs_.find(message.to);
+  if (addr_it == peer_addrs_.end() || !receive_handler_) {
     return;
   }
+  const auto peer_addr = addr_it->second;
+  const auto local_id = local_node_id_;
+  auto handler = receive_handler_;
 
-  if (std::holds_alternative<RequestVoteRequest>(message.rpc)) {
-    grpc::ClientContext context;
-    const auto request = ToProto(std::get<RequestVoteRequest>(message.rpc));
-    kvstore::v1::RequestVoteResponse response;
-    const auto status = stub->RequestVote(&context, request, &response);
-    if (!status.ok()) {
+  std::thread([message = std::move(message), peer_addr, local_id,
+               handler = std::move(handler)]() mutable {
+    auto channel = grpc::CreateChannel(peer_addr, grpc::InsecureChannelCredentials());
+    auto stub = kvstore::v1::RaftPeer::NewStub(channel);
+
+    if (std::holds_alternative<RequestVoteRequest>(message.rpc)) {
+      grpc::ClientContext context;
+      const auto request = ToProto(std::get<RequestVoteRequest>(message.rpc));
+      kvstore::v1::RequestVoteResponse response;
+      const auto status = stub->RequestVote(&context, request, &response);
+      if (!status.ok()) {
+        return;
+      }
+      handler(Message{
+          .from = message.to,
+          .to = local_id,
+          .rpc = Rpc{FromProto(response)},
+      });
       return;
     }
-    receive_handler_(Message{
-        .from = message.to,
-        .to = local_node_id_,
-        .rpc = Rpc{FromProto(response)},
-    });
-    return;
-  }
 
-  if (std::holds_alternative<AppendEntriesRequest>(message.rpc)) {
-    grpc::ClientContext context;
-    const auto request = ToProto(std::get<AppendEntriesRequest>(message.rpc));
-    kvstore::v1::AppendEntriesResponse response;
-    const auto status = stub->AppendEntries(&context, request, &response);
-    if (!status.ok()) {
-      return;
+    if (std::holds_alternative<AppendEntriesRequest>(message.rpc)) {
+      grpc::ClientContext context;
+      const auto request = ToProto(std::get<AppendEntriesRequest>(message.rpc));
+      kvstore::v1::AppendEntriesResponse response;
+      const auto status = stub->AppendEntries(&context, request, &response);
+      if (!status.ok()) {
+        return;
+      }
+      handler(Message{
+          .from = message.to,
+          .to = local_id,
+          .rpc = Rpc{FromProto(response)},
+      });
     }
-    receive_handler_(Message{
-        .from = message.to,
-        .to = local_node_id_,
-        .rpc = Rpc{FromProto(response)},
-    });
-  }
+  }).detach();
 }
 
 }  // namespace kvstore::raft
