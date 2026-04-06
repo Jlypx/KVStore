@@ -13,55 +13,11 @@ auto DefaultNodeIds() -> std::vector<NodeId> {
 }  // namespace
 
 auto TestTransport::RegisterNode(NodeId id, RaftNode* node) -> void {
-  nodes_[id] = node;
-  if (up_.find(id) == up_.end()) {
-    up_[id] = true;
-  }
-}
-
-auto TestTransport::SetNodeUp(NodeId id, bool up) -> void { up_[id] = up; }
-
-auto TestTransport::IsNodeUp(NodeId id) const -> bool {
-  const auto it = up_.find(id);
-  if (it == up_.end()) {
-    return false;
-  }
-  return it->second;
-}
-
-auto TestTransport::Send(Message message) -> void {
-  if (!IsNodeUp(message.from) || !IsNodeUp(message.to)) {
-    return;
-  }
-
-  queue_.push_back(Envelope{.seq = next_seq_, .message = std::move(message)});
-  next_seq_ += 1;
-}
-
-auto TestTransport::DeliverSome(std::size_t limit) -> std::size_t {
-  std::size_t delivered = 0;
-  while (!queue_.empty() && delivered < limit) {
-    Envelope envelope = std::move(queue_.front());
-    queue_.pop_front();
-
-    if (!IsNodeUp(envelope.message.to)) {
-      continue;
+  InProcessTransport::RegisterNode(id, [node](Message message) {
+    if (node != nullptr) {
+      node->Step(std::move(message));
     }
-    const auto it = nodes_.find(envelope.message.to);
-    if (it == nodes_.end() || it->second == nullptr) {
-      continue;
-    }
-
-    it->second->Step(envelope.message);
-    delivered += 1;
-  }
-  return delivered;
-}
-
-auto TestTransport::DeliverAll() -> std::size_t {
-  // Hard cap to avoid infinite loops if a bug produces message storms.
-  constexpr std::size_t kMax = 1'000'000;
-  return DeliverSome(kMax);
+  });
 }
 
 TestCluster::TestCluster()

@@ -2,47 +2,18 @@
 #define KVSTORE_RAFT_TEST_TRANSPORT_H
 
 #include <filesystem>
-#include <cstddef>
-#include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
-#include <unordered_map>
-#include <utility>
 #include <vector>
 
+#include "kvstore/raft/inprocess_transport.h"
 #include "kvstore/raft/raft_node.h"
-#include "kvstore/raft/raft_types.h"
 
 namespace kvstore::raft {
 
-class TestTransport {
+class TestTransport : public InProcessTransport {
  public:
   auto RegisterNode(NodeId id, RaftNode* node) -> void;
-
-  auto SetNodeUp(NodeId id, bool up) -> void;
-  [[nodiscard]] auto IsNodeUp(NodeId id) const -> bool;
-
-  // RaftNode SendFn target.
-  auto Send(Message message) -> void;
-
-  auto DeliverSome(std::size_t limit) -> std::size_t;
-  auto DeliverAll() -> std::size_t;
-
-  [[nodiscard]] auto pending_message_count() const -> std::size_t {
-    return queue_.size();
-  }
-
- private:
-  struct Envelope {
-    std::uint64_t seq = 0;
-    Message message;
-  };
-
-  std::uint64_t next_seq_ = 1;
-  std::deque<Envelope> queue_;
-  std::unordered_map<NodeId, RaftNode*> nodes_;
-  std::unordered_map<NodeId, bool> up_;
 };
 
 class TestCluster {
