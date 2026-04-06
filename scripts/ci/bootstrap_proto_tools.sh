@@ -8,7 +8,9 @@ SYSROOT_DIR="${TOOLS_DIR}/sysroot"
 LOCAL_BIN_DIR="${SYSROOT_DIR}/usr/bin"
 
 have_apt_package() {
-  apt-cache show "$1" >/dev/null 2>&1
+  local candidate=""
+  candidate="$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ { print $2; exit }')"
+  [[ -n "${candidate}" && "${candidate}" != "(none)" ]]
 }
 
 resolve_exact_package() {
@@ -105,6 +107,7 @@ append_package "$(resolve_package \
 
 (
   cd "${PACKAGES_DIR}"
+  echo "[proto-tools] Downloading packages: ${packages[*]}"
   apt-get download "${packages[@]}"
 )
 
