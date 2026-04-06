@@ -10,6 +10,14 @@ namespace {
 
 constexpr std::size_t kMaxKeyBytes = 1024;
 constexpr std::size_t kMaxValueBytes = 1024 * 1024;
+// Embedded-mode timings are intentionally aggressive for fast unit tests, but
+// real multi-process gRPC traffic needs a less fragile profile to avoid leader
+// churn under scheduler jitter and connection setup latency.
+constexpr std::uint64_t kClusterElectionTimeoutMinTicks = 15;
+constexpr std::uint64_t kClusterElectionTimeoutMaxTicks = 30;
+constexpr std::uint64_t kClusterHeartbeatIntervalTicks = 2;
+constexpr std::uint64_t kClusterQuorumTimeoutTicks = 15;
+constexpr auto kClusterTickPeriod = std::chrono::milliseconds(10);
 
 enum class Op : std::uint8_t {
   kPut = 1,
@@ -171,10 +179,10 @@ auto ClusterNodeService::Start() -> bool {
   kvstore::raft::RaftNodeConfig raft_config;
   raft_config.node_id = config_.self_id;
   raft_config.static_node_ids = std::move(node_ids);
-  raft_config.election_timeout_ticks_min = 5;
-  raft_config.election_timeout_ticks_max = 10;
-  raft_config.heartbeat_interval_ticks = 1;
-  raft_config.quorum_timeout_ticks = 5;
+  raft_config.election_timeout_ticks_min = kClusterElectionTimeoutMinTicks;
+  raft_config.election_timeout_ticks_max = kClusterElectionTimeoutMaxTicks;
+  raft_config.heartbeat_interval_ticks = kClusterHeartbeatIntervalTicks;
+  raft_config.quorum_timeout_ticks = kClusterQuorumTimeoutTicks;
   raft_config.random_seed = static_cast<std::uint32_t>(config_.self_id * 101U + 11U);
   raft_config.storage_dir = config_.data_dir / "raft";
 
@@ -250,7 +258,7 @@ auto ClusterNodeService::TickLoop() -> void {
         pending_snapshot_.reset();
       }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(kClusterTickPeriod);
   }
 }
 
