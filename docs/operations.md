@@ -46,6 +46,7 @@ This is the `cluster-node` topology:
 - one peer listener per node
 - static five-node peer membership from config
 - one local engine and one local Raft state directory per process
+- local Raft snapshots and `InstallSnapshot` catch-up when a follower falls behind the leader's compacted log
 
 ## Build and start prerequisites
 

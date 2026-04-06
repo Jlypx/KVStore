@@ -16,6 +16,11 @@ The current validation stack now has three layers.
 | WSL and runtime smoke style | Real `kvd` process plus external client smoke wrappers and evidence capture scripts | `scripts/chaos/partition_heal_check.py`, `scripts/chaos/kill_leader_and_assert.py`, `scripts/chaos/assert_restart_rto.py`, `scripts/integrity/run_corruption_suite.py`, `scripts/bench/run_baseline.sh`, `scripts/bench/assert_slo.py` | That the built binaries run end to end in the current environment, emit machine-readable evidence, and preserve the same behavior when exercised through the shipped runtime entry points |
 | Same-host multi-process cluster | Five real `kvd --mode=cluster-node` processes on loopback with peer gRPC | `tests/integration/multi_process_cluster_test.cpp`, `scripts/cluster/start_local_cluster.sh`, `scripts/cluster/stop_local_cluster.sh` | That leader election, redirection, replication, and failover also work across real processes rather than only in the embedded transport |
 
+Snapshot coverage now exists in both deterministic and same-host forms:
+
+- `tests/snapshot_test.cpp` verifies snapshot export/import, Raft snapshot metadata, and follower catch-up through `InstallSnapshot` in the deterministic embedded path
+- `tests/integration/multi_process_cluster_test.cpp` now also exercises automatic snapshot catch-up in the same-host five-node runtime
+
 The important split is that most correctness and storage checks are deterministic and in-process, while the Task 7 transport and profile checks are runtime smoke checks that explicitly run through WSL-facing paths and external client connections.
 
 ## Deterministic Raft tests

@@ -56,7 +56,7 @@ In `cluster-node` mode, each node persists only its own engine and Raft state un
 |---|---|---|
 | `api` | Protobuf surface and gRPC status translation only | `proto/kvstore/v1/kv.proto`, `src/api/grpc_kv_service.cpp` |
 | `service` | Request validation, idempotency, leader routing, orchestration | `src/service/kv_raft_service.cpp` |
-| `raft` | Election, replication, quorum checks, durable Raft state, in-process and network transport | `src/raft/raft_node.cpp`, `src/raft/test_transport.cpp`, `src/raft/network_transport.cpp`, `src/raft/raft_storage.cpp` |
+| `raft` | Election, replication, quorum checks, durable Raft state, in-process and network transport, snapshot install and log truncation | `src/raft/raft_node.cpp`, `src/raft/test_transport.cpp`, `src/raft/network_transport.cpp`, `src/raft/raft_storage.cpp` |
 | `engine` | WAL, memtable, SST read/write, compaction, per-node state machine storage | `src/engine/kv_engine.cpp`, `src/engine/wal.cpp`, `src/engine/sstable.cpp`, `src/engine/compaction.cpp` |
 | `cache` | SST block cache for repeated reads | `src/cache/block_cache.cpp` |
 | `integrity` | CRC32C checksum generation and verification, integrity error propagation | `src/integrity/crc32c.cpp`, `src/engine/wal.cpp`, `src/engine/sstable.cpp` |
@@ -112,6 +112,13 @@ These boundaries match the v1 scope contract in `docs/architecture/scope.md`. Th
 - SSTables are immutable, sorted, block-framed files with an index block and checksummed footer.
 - `KvEngine::Flush()` writes a new SST from memtable contents.
 - `KvEngine::Compact()` merges existing SSTs into one new SST and replaces old files.
+
+### Snapshots
+
+- Raft snapshot metadata and log truncation are implemented in `src/raft/raft_node.cpp` and `src/raft/raft_storage.cpp`.
+- State-machine snapshot export and install are implemented in `src/engine/kv_engine.cpp`.
+- Peer snapshot transfer uses the internal `kvstore.v1.RaftPeer` service in `proto/kvstore/v1/raft.proto`.
+- A lagging follower can now catch up by installing a snapshot when it falls behind the leader's truncated log prefix.
 
 ### Block cache
 

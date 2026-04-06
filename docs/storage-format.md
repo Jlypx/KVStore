@@ -24,8 +24,11 @@ Current storage behavior in `src/engine/kv_engine.cpp` is:
 - `Compact()` rewrites multiple SST files into one new SST, then removes the compacted input files
 - SST filenames are numeric `.sst` files, padded to six digits while the id fits, for example `000001.sst`
 
-The engine does not implement a manifest, bloom filters, compression, snapshots, or multi-version on-disk compatibility metadata.
+The engine does not implement a manifest, bloom filters, compression, or multi-version on-disk compatibility metadata.
 The current durable state is just the configured WAL file plus the SST files that exist beside it.
+
+In addition to WAL and SST state, the repository now also has a separate Raft snapshot and metadata story implemented in `src/raft/raft_storage.cpp` and `src/raft/raft_node.cpp`.
+That snapshot path is not encoded as an SST feature; it is coordinated above the raw SST format as a state-machine export/import payload.
 
 ## WAL v1 record format
 
@@ -222,7 +225,8 @@ This section describes the current v1 contract, not a future one.
 - Key, value, and request id sizes are constrained by the v1 engine contract, `key <= 1024`, `value <= 1 MiB`, `request_id <= 4 KiB`.
 - `target_block_sz` is stored in the SST header as a writer hint. The reader does not rely on it for correctness.
 - The current format does not claim compatibility with LevelDB, RocksDB, or any external storage format.
-- The current format does not include manifests, bloom filters, compression, snapshots, tombstone-only block types, or multiple on-disk schema versions.
+- The current SST format still does not include manifests, bloom filters, compression, or multiple on-disk schema versions.
+- Snapshot support now exists at the engine/Raft coordination layer, but it is not represented as a distinct SST file subtype.
 
 ## Validation and evidence
 
