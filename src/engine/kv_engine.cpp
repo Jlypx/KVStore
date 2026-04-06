@@ -37,6 +37,33 @@ auto FormatSstFilename(std::uint64_t id) -> std::string {
   return out + ".sst";
 }
 
+auto ParseWalGenerationFromFilename(const std::filesystem::path& path)
+    -> std::optional<std::uint64_t> {
+  if (path.extension() != ".wal") {
+    return std::nullopt;
+  }
+  const auto stem = path.stem().string();
+  if (stem.empty()) {
+    return std::nullopt;
+  }
+  std::uint64_t value = 0;
+  for (char ch : stem) {
+    if (!std::isdigit(static_cast<unsigned char>(ch))) {
+      return std::nullopt;
+    }
+    value = value * 10ULL + static_cast<std::uint64_t>(ch - '0');
+  }
+  return value;
+}
+
+auto FormatWalFilename(std::uint64_t generation) -> std::string {
+  std::string out = std::to_string(generation);
+  if (out.size() < 6) {
+    out = std::string(6 - out.size(), '0') + out;
+  }
+  return out + ".wal";
+}
+
 }  // namespace
 
 KvEngine::KvEngine(std::filesystem::path wal_path) : wal_path_(std::move(wal_path)) {}
@@ -54,39 +81,49 @@ auto KvEngine::Open() -> bool {
 
   WalReplayResult replay_result;
   std::size_t duplicate_requests = 0;
-  if (!WalReader::Replay(
-      wal_path_,
-      [this, &duplicate_requests](const WalRecord& record) {
-        Mutation mutation;
-        mutation.type = (record.operation == WalOperation::kPut) ? MutationType::kPut
-                                                                  : MutationType::kDelete;
-        mutation.key = record.key;
-        mutation.value = record.value;
-        mutation.request_id = record.request_id;
+  const auto wal_segments = DiscoverWalSegments(wal_path_);
+  for (const auto& wal_segment : wal_segments) {
+    WalReplayResult segment_result;
+    if (!WalReader::Replay(
+            wal_segment,
+            [this, &duplicate_requests](const WalRecord& record) {
+              Mutation mutation;
+              mutation.type = (record.operation == WalOperation::kPut)
+                                  ? MutationType::kPut
+                                  : MutationType::kDelete;
+              mutation.key = record.key;
+              mutation.value = record.value;
+              mutation.request_id = record.request_id;
 
-        const auto disposition = memtable_.Apply(mutation);
-        if (disposition == ApplyDisposition::kDuplicate) {
-          duplicate_requests += 1;
-        }
-      },
-      &replay_result)) {
-    last_integrity_error_ = replay_result.error;
-    return false;
-  }
+              const auto disposition = memtable_.Apply(mutation);
+              if (disposition == ApplyDisposition::kDuplicate) {
+                duplicate_requests += 1;
+              }
+            },
+            &segment_result)) {
+      last_integrity_error_ = segment_result.error;
+      return false;
+    }
 
-  if (!replay_result.Ok()) {
-    last_integrity_error_ = replay_result.error;
-    return false;
+    if (!segment_result.Ok()) {
+      last_integrity_error_ = segment_result.error;
+      return false;
+    }
+    replay_result.stats.records_replayed += segment_result.stats.records_replayed;
   }
 
   recovery_stats_ = replay_result.stats;
   recovery_stats_.duplicate_requests = duplicate_requests;
 
+  const auto active_wal_path = wal_segments.empty() ? wal_path_ : wal_segments.back();
+  next_wal_generation_ =
+      ParseWalGenerationFromFilename(active_wal_path).value_or(0) + 1;
   integrity::IntegrityError open_error;
-  if (!wal_writer_.Open(wal_path_, &open_error)) {
+  if (!wal_writer_.Open(active_wal_path, &open_error)) {
     last_integrity_error_ = open_error;
     return false;
   }
+  wal_path_ = active_wal_path;
 
   return true;
 }
@@ -167,8 +204,17 @@ auto KvEngine::Flush() -> bool {
     last_integrity_error_ = error;
     return false;
   }
+
+  const auto next_wal_path = NextWalPath();
+  integrity::IntegrityError wal_open_error;
+  if (!wal_writer_.Open(next_wal_path, &wal_open_error)) {
+    last_integrity_error_ = wal_open_error;
+    return false;
+  }
+
   sstables_.push_back(SstableFile{.path = path, .reader = std::move(reader)});
   memtable_.ClearKvs();
+  wal_path_ = next_wal_path;
   return true;
 }
 
@@ -361,6 +407,12 @@ auto KvEngine::NextSstPath() -> std::filesystem::path {
   const auto id = next_sst_id_;
   next_sst_id_ += 1;
   return sst_dir_ / FormatSstFilename(id);
+}
+
+auto KvEngine::NextWalPath() -> std::filesystem::path {
+  const auto generation = next_wal_generation_;
+  next_wal_generation_ += 1;
+  return wal_path_.parent_path() / FormatWalFilename(generation);
 }
 
 }  // namespace kvstore::engine

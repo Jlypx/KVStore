@@ -1,5 +1,6 @@
 #include "kvstore/engine/wal.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,15 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <share.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #include "kvstore/integrity/crc32c.h"
 
@@ -131,7 +141,109 @@ auto MakeError(integrity::IntegrityErrorCode code, std::size_t record_index,
   };
 }
 
+auto ParseWalGeneration(const std::filesystem::path& wal_path)
+    -> std::optional<std::uint64_t> {
+  if (wal_path.extension() != ".wal") {
+    return std::nullopt;
+  }
+  const auto stem = wal_path.stem().string();
+  if (stem.empty()) {
+    return std::nullopt;
+  }
+
+  std::uint64_t generation = 0;
+  for (char ch : stem) {
+    if (ch < '0' || ch > '9') {
+      return std::nullopt;
+    }
+    generation = generation * 10ULL + static_cast<std::uint64_t>(ch - '0');
+  }
+  return generation;
+}
+
+auto SyncWalPath(const std::filesystem::path& wal_path,
+                 integrity::IntegrityError* error) -> bool {
+#ifdef _WIN32
+  int fd = -1;
+  errno_t open_result =
+      _wsopen_s(&fd, wal_path.c_str(), _O_RDONLY | _O_BINARY, _SH_DENYNO, 0);
+  if (open_result != 0 || fd < 0) {
+    if (error != nullptr) {
+      *error = MakeError(integrity::IntegrityErrorCode::kIoError, 0,
+                         "failed to open WAL file for sync");
+    }
+    return false;
+  }
+  const int sync_result = _commit(fd);
+  _close(fd);
+  if (sync_result != 0) {
+    if (error != nullptr) {
+      *error = MakeError(integrity::IntegrityErrorCode::kIoError, 0,
+                         "failed to sync WAL file");
+    }
+    return false;
+  }
+  return true;
+#else
+  const int fd = ::open(wal_path.c_str(), O_RDONLY);
+  if (fd < 0) {
+    if (error != nullptr) {
+      *error = MakeError(integrity::IntegrityErrorCode::kIoError, 0,
+                         "failed to open WAL file for sync");
+    }
+    return false;
+  }
+  const int sync_result = ::fsync(fd);
+  ::close(fd);
+  if (sync_result != 0) {
+    if (error != nullptr) {
+      *error = MakeError(integrity::IntegrityErrorCode::kIoError, 0,
+                         "failed to sync WAL file");
+    }
+    return false;
+  }
+  return true;
+#endif
+}
+
 }  // namespace
+
+auto DiscoverWalSegments(const std::filesystem::path& wal_path)
+    -> std::vector<std::filesystem::path> {
+  std::vector<std::pair<std::uint64_t, std::filesystem::path>> ordered;
+  std::error_code ec;
+  const auto wal_dir = wal_path.parent_path();
+  if (!wal_dir.empty()) {
+    for (const auto& entry : std::filesystem::directory_iterator(wal_dir, ec)) {
+      if (ec) {
+        break;
+      }
+      if (!entry.is_regular_file()) {
+        continue;
+      }
+      const auto generation = ParseWalGeneration(entry.path());
+      if (!generation.has_value()) {
+        continue;
+      }
+      ordered.emplace_back(generation.value(), entry.path());
+    }
+  }
+
+  if (ordered.empty()) {
+    ordered.emplace_back(ParseWalGeneration(wal_path).value_or(1), wal_path);
+  }
+
+  std::sort(ordered.begin(), ordered.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+
+  std::vector<std::filesystem::path> segments;
+  segments.reserve(ordered.size());
+  for (const auto& [generation, path] : ordered) {
+    static_cast<void>(generation);
+    segments.push_back(path);
+  }
+  return segments;
+}
 
 auto WalWriter::Open(const std::filesystem::path& wal_path,
                      integrity::IntegrityError* error) -> bool {
@@ -186,6 +298,10 @@ auto WalWriter::Append(const WalRecord& record, integrity::IntegrityError* error
       *error = MakeError(integrity::IntegrityErrorCode::kIoError, 0,
                          "failed to append record to WAL");
     }
+    return false;
+  }
+
+  if (!SyncWalPath(wal_path_, error)) {
     return false;
   }
 

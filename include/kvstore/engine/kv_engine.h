@@ -56,6 +56,7 @@ class KvEngine {
   auto ApplyMutation(const Mutation& mutation) -> ApplyResult;
   auto LoadSstables() -> bool;
   auto NextSstPath() -> std::filesystem::path;
+  auto NextWalPath() -> std::filesystem::path;
 
   std::filesystem::path wal_path_;
   std::filesystem::path sst_dir_;
@@ -72,6 +73,7 @@ class KvEngine {
   };
   std::vector<SstableFile> sstables_;  // oldest -> newest
   std::uint64_t next_sst_id_ = 1;
+  std::uint64_t next_wal_generation_ = 1;
 };
 
 }  // namespace kvstore::engine

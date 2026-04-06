@@ -1,4 +1,5 @@
 #include "kvstore/engine/kv_engine.h"
+#include "kvstore/engine/wal.h"
 
 #include <filesystem>
 #include <iostream>
@@ -139,6 +140,101 @@ int main() {
   const auto value_k4 = tombstone_from_sst_only.Get("k4");
   if (!Expect(!value_k4.has_value(),
               "k4 should remain deleted when recovered from SST only")) {
+    return 1;
+  }
+
+  const auto multi_wal_dir = MakeTempDirectory("recovery_multi_wal");
+  const auto wal1 = multi_wal_dir / "000001.wal";
+  const auto wal2 = multi_wal_dir / "000002.wal";
+  {
+    kvstore::engine::WalWriter writer1;
+    kvstore::integrity::IntegrityError wal_error;
+    if (!Expect(writer1.Open(wal1, &wal_error),
+                "first wal writer should open")) {
+      return 1;
+    }
+    kvstore::engine::WalRecord record1;
+    record1.operation = kvstore::engine::WalOperation::kPut;
+    record1.key = "k5";
+    record1.value = "v5";
+    record1.request_id = "req-8";
+    if (!Expect(writer1.Append(record1, &wal_error),
+                "first wal append should succeed")) {
+      return 1;
+    }
+
+    kvstore::engine::WalWriter writer2;
+    if (!Expect(writer2.Open(wal2, &wal_error),
+                "second wal writer should open")) {
+      return 1;
+    }
+    kvstore::engine::WalRecord record2;
+    record2.operation = kvstore::engine::WalOperation::kPut;
+    record2.key = "k6";
+    record2.value = "v6";
+    record2.request_id = "req-9";
+    if (!Expect(writer2.Append(record2, &wal_error),
+                "second wal append should succeed")) {
+      return 1;
+    }
+  }
+
+  kvstore::engine::KvEngine multi_wal_recovered(wal1);
+  if (!Expect(multi_wal_recovered.Open(),
+              "engine open with multiple wal generations should succeed")) {
+    return 1;
+  }
+  const auto value_k5 = multi_wal_recovered.Get("k5");
+  const auto value_k6 = multi_wal_recovered.Get("k6");
+  if (!Expect(value_k5.has_value() && value_k5.value() == "v5",
+              "first wal generation should replay") ||
+      !Expect(value_k6.has_value() && value_k6.value() == "v6",
+              "second wal generation should replay")) {
+    return 1;
+  }
+
+  const auto rotated_dir = MakeTempDirectory("recovery_rotated_wal");
+  const auto rotated_wal1 = rotated_dir / "000001.wal";
+  const auto rotated_wal2 = rotated_dir / "000002.wal";
+  {
+    kvstore::engine::KvEngine rotating_engine(rotated_wal1);
+    if (!Expect(rotating_engine.Open(), "rotating engine open should succeed")) {
+      return 1;
+    }
+    if (!Expect(rotating_engine.Put("k7", "v7", "req-10").Ok(),
+                "put before wal rotation should succeed")) {
+      return 1;
+    }
+    if (!Expect(rotating_engine.Flush(),
+                "flush before wal rotation should succeed")) {
+      return 1;
+    }
+    if (!Expect(rotating_engine.Put("k8", "v8", "req-11").Ok(),
+                "put after wal rotation point should succeed")) {
+      return 1;
+    }
+  }
+
+  if (!Expect(std::filesystem::exists(rotated_wal1),
+              "first wal generation should exist")) {
+    return 1;
+  }
+  if (!Expect(std::filesystem::exists(rotated_wal2),
+              "second wal generation should exist after flush rotation")) {
+    return 1;
+  }
+
+  kvstore::engine::KvEngine rotated_recovered(rotated_wal1);
+  if (!Expect(rotated_recovered.Open(),
+              "engine open after wal rotation should succeed")) {
+    return 1;
+  }
+  const auto value_k7 = rotated_recovered.Get("k7");
+  const auto value_k8 = rotated_recovered.Get("k8");
+  if (!Expect(value_k7.has_value() && value_k7.value() == "v7",
+              "value from first wal generation should survive rotation") ||
+      !Expect(value_k8.has_value() && value_k8.value() == "v8",
+              "value from second wal generation should survive rotation")) {
     return 1;
   }
 

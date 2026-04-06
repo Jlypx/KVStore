@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "kvstore/integrity/integrity_error.h"
 
@@ -40,6 +41,9 @@ struct WalReplayResult {
 
   [[nodiscard]] auto Ok() const -> bool { return !error.has_value(); }
 };
+
+auto DiscoverWalSegments(const std::filesystem::path& wal_path)
+    -> std::vector<std::filesystem::path>;
 
 class WalWriter {
  public:
