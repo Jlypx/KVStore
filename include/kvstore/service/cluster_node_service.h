@@ -100,6 +100,7 @@ class ClusterNodeService final : public KvService {
 
   std::atomic<bool> stop_{false};
   bool started_ = false;
+  std::optional<kvstore::raft::SnapshotMetadata> pending_snapshot_;
   std::thread ticker_;
 };
 

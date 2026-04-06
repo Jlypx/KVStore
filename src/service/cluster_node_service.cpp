@@ -237,6 +237,11 @@ auto ClusterNodeService::TickLoop() -> void {
       if (node_) {
         node_->Tick();
       }
+      if (node_ && node_->role() == kvstore::raft::Role::kLeader &&
+          pending_snapshot_.has_value()) {
+        node_->InstallLocalSnapshot(pending_snapshot_.value());
+        pending_snapshot_.reset();
+      }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -292,6 +297,12 @@ auto ClusterNodeService::OnCommitted(
     }
   }
 
+  if (node_ && node_->role() == kvstore::raft::Role::kLeader) {
+    const auto snapshot = node_->MaybeSnapshotMetadata();
+    if (snapshot.has_value()) {
+      pending_snapshot_ = snapshot;
+    }
+  }
 }
 
 auto ClusterNodeService::Put(const std::string& key,
