@@ -49,6 +49,7 @@ struct RaftOptions {
   std::uint64_t election_timeout_max_ticks = 10;
   std::uint64_t heartbeat_interval_ticks = 1;
   std::uint64_t quorum_timeout_ticks = 5;
+  std::uint64_t snapshot_threshold_entries = 32;
   std::chrono::milliseconds tick_period{1};
 };
 
@@ -100,6 +101,7 @@ class KvRaftService : public KvService {
   // Test hooks.
   auto SetNodeUp(kvstore::raft::NodeId id, bool up) -> void;
   [[nodiscard]] auto FindLeader() const -> std::optional<kvstore::raft::NodeId>;
+  auto ForceLeaderSnapshotForTesting() -> bool;
 
  private:
   struct Impl;

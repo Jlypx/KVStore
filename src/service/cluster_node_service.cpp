@@ -186,6 +186,28 @@ auto ClusterNodeService::Start() -> bool {
   node_->SetOnCommitted([this](std::vector<kvstore::raft::CommittedEntry> entries) {
     this->OnCommitted(std::move(entries));
   });
+  node_->SetSnapshotHooks(kvstore::raft::SnapshotHooks{
+      .on_snapshot_send_requested =
+          [this](kvstore::raft::NodeId target, const kvstore::raft::SnapshotMetadata& base) {
+            if (!transport_ || !engine_ || !node_) {
+              return;
+            }
+            std::string payload;
+            if (!engine_->ExportSnapshotPayload(&payload)) {
+              return;
+            }
+            transport_->Send(kvstore::raft::Message{
+                .from = config_.self_id,
+                .to = target,
+                .rpc = kvstore::raft::Rpc{kvstore::raft::InstallSnapshotRequest{
+                    .term = node_->current_term(),
+                    .leader_id = config_.self_id,
+                    .last_included_index = base.last_included_index,
+                    .last_included_term = base.last_included_term,
+                    .snapshot_payload = std::move(payload),
+                }},
+            });
+          }});
   transport_->RegisterNode(config_.self_id, [this](kvstore::raft::Message message) {
     std::lock_guard<std::recursive_mutex> response_lock(mu_);
     if (node_) {
@@ -269,6 +291,7 @@ auto ClusterNodeService::OnCommitted(
       }
     }
   }
+
 }
 
 auto ClusterNodeService::Put(const std::string& key,
@@ -463,6 +486,22 @@ auto ClusterNodeService::HandlePeerAppendEntries(
     -> kvstore::raft::AppendEntriesResponse {
   std::lock_guard<std::recursive_mutex> lock(mu_);
   return node_->HandlePeerAppendEntries(from, request);
+}
+
+auto ClusterNodeService::HandlePeerInstallSnapshot(
+    kvstore::raft::NodeId /*from*/,
+    const kvstore::raft::InstallSnapshotRequest& request)
+    -> kvstore::raft::InstallSnapshotResponse {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
+  const bool ok = engine_ && engine_->InstallSnapshotPayload(request.snapshot_payload);
+  if (!ok || !node_) {
+    return kvstore::raft::InstallSnapshotResponse{
+        .term = node_ ? node_->current_term() : request.term,
+        .success = false,
+        .last_included_index = request.last_included_index,
+    };
+  }
+  return node_->HandlePeerInstallSnapshot(request.leader_id, request);
 }
 
 auto ClusterNodeService::FindLeader() const

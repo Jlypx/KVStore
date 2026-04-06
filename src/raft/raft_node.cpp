@@ -45,12 +45,14 @@ RaftNode::RaftNode(RaftNodeConfig config, SendFn send)
     if (storage_->Load(&persisted)) {
       current_term_ = persisted.current_term;
       voted_for_ = persisted.voted_for;
+      log_base_index_ = persisted.snapshot_last_included_index;
+      log_base_term_ = persisted.snapshot_last_included_term;
       log_ = std::move(persisted.log);
     }
   }
 
   if (log_.empty()) {
-    log_.push_back(LogEntry{.term = 0, .command = ""});
+    log_.push_back(LogEntry{.term = log_base_term_, .command = ""});
   }
   ResetElectionTimeout();
 }
@@ -100,6 +102,14 @@ auto RaftNode::Step(const Message& message) -> void {
           HandleAppendEntries(message.from, rpc);
         } else if constexpr (std::is_same_v<T, AppendEntriesResponse>) {
           HandleAppendEntriesResponse(message.from, rpc);
+        } else if constexpr (std::is_same_v<T, InstallSnapshotRequest>) {
+          SendTo(message.from, Rpc{BuildInstallSnapshotResponse(message.from, rpc)});
+        } else if constexpr (std::is_same_v<T, InstallSnapshotResponse>) {
+          HandleAppendEntriesResponse(
+              message.from,
+              AppendEntriesResponse{.term = rpc.term,
+                                    .success = rpc.success,
+                                    .match_index = rpc.last_included_index});
         }
       },
       message.rpc);
@@ -180,6 +190,21 @@ auto RaftNode::IsLogUpToDate(LogIndex last_index, Term last_term) const -> bool 
   return last_index >= last_log_index();
 }
 
+auto RaftNode::LogOffset(LogIndex index) const -> std::optional<std::size_t> {
+  if (index < log_base_index_ || index > last_log_index()) {
+    return std::nullopt;
+  }
+  return static_cast<std::size_t>(index - log_base_index_);
+}
+
+auto RaftNode::TermAt(LogIndex index) const -> std::optional<Term> {
+  const auto offset = LogOffset(index);
+  if (!offset.has_value()) {
+    return std::nullopt;
+  }
+  return log_[offset.value()].term;
+}
+
 auto RaftNode::HandleRequestVote(NodeId from,
                                  const RequestVoteRequest& request) -> void {
   SendTo(from, Rpc{BuildRequestVoteResponse(from, request)});
@@ -222,13 +247,12 @@ auto RaftNode::LeaderSendAppendEntries(NodeId follower_id) -> void {
   }
 
   LogIndex next = it->second;
-  if (next == 0) {
+  if (next <= log_base_index_) {
     if (snapshot_hooks_.on_snapshot_send_requested) {
       snapshot_hooks_.on_snapshot_send_requested(
-          follower_id, SnapshotMetadata{.last_included_index = 0,
-                                        .last_included_term = 0});
+          follower_id, SnapshotMetadata{.last_included_index = log_base_index_,
+                                        .last_included_term = log_base_term_});
     }
-    it->second = 1;
     return;
   }
 
@@ -244,12 +268,14 @@ auto RaftNode::LeaderSendAppendEntries(NodeId follower_id) -> void {
   request.term = current_term_;
   request.leader_id = config_.node_id;
   request.prev_log_index = prev;
-  request.prev_log_term =
-      log_[static_cast<std::size_t>(request.prev_log_index)].term;
+  request.prev_log_term = TermAt(request.prev_log_index).value_or(log_base_term_);
   request.leader_commit = commit_index_;
 
   for (LogIndex idx = next; idx <= last; ++idx) {
-    request.entries.push_back(log_[static_cast<std::size_t>(idx)]);
+    const auto offset = LogOffset(idx);
+    if (offset.has_value()) {
+      request.entries.push_back(log_[offset.value()]);
+    }
   }
 
   SendTo(follower_id, Rpc{std::move(request)});
@@ -302,7 +328,8 @@ auto RaftNode::AdvanceCommitIndex() -> void {
   }
 
   for (LogIndex idx = last_log_index(); idx > commit_index_; --idx) {
-    if (log_[static_cast<std::size_t>(idx)].term != current_term_) {
+    const auto term = TermAt(idx);
+    if (!term.has_value() || term.value() != current_term_) {
       continue;
     }
 
@@ -329,7 +356,11 @@ auto RaftNode::ApplyCommitted() -> void {
 
   std::vector<CommittedEntry> committed;
   for (LogIndex idx = last_applied_ + 1; idx <= commit_index_; ++idx) {
-    const auto& entry = log_[static_cast<std::size_t>(idx)];
+    const auto offset = LogOffset(idx);
+    if (!offset.has_value()) {
+      continue;
+    }
+    const auto& entry = log_[offset.value()];
     committed.push_back(CommittedEntry{.index = idx,
                                        .term = entry.term,
                                        .command = entry.command});
@@ -366,10 +397,52 @@ auto RaftNode::HasQuorumContact() const -> bool {
 }
 
 auto RaftNode::log_entry_at(LogIndex index) const -> std::optional<LogEntry> {
-  if (index > last_log_index()) {
+  const auto offset = LogOffset(index);
+  if (!offset.has_value()) {
     return std::nullopt;
   }
-  return log_[static_cast<std::size_t>(index)];
+  return log_[offset.value()];
+}
+
+auto RaftNode::MaybeSnapshotMetadata() const -> std::optional<SnapshotMetadata> {
+  if (commit_index_ <= log_base_index_) {
+    return std::nullopt;
+  }
+  if ((commit_index_ - log_base_index_) < config_.snapshot_threshold_entries) {
+    return std::nullopt;
+  }
+  const auto term = TermAt(commit_index_);
+  if (!term.has_value()) {
+    return std::nullopt;
+  }
+  return SnapshotMetadata{
+      .last_included_index = commit_index_,
+      .last_included_term = term.value(),
+  };
+}
+
+auto RaftNode::InstallLocalSnapshot(const SnapshotMetadata& metadata) -> void {
+  if (metadata.last_included_index <= log_base_index_) {
+    return;
+  }
+
+  std::vector<LogEntry> new_log;
+  const auto suffix_start = metadata.last_included_index + 1;
+  new_log.push_back(LogEntry{.term = metadata.last_included_term, .command = ""});
+  for (LogIndex index = suffix_start; index <= last_log_index(); ++index) {
+    const auto offset = LogOffset(index);
+    if (offset.has_value()) {
+      new_log.push_back(log_[offset.value()]);
+    }
+  }
+
+  log_base_index_ = metadata.last_included_index;
+  log_base_term_ = metadata.last_included_term;
+  log_ = std::move(new_log);
+  commit_index_ = std::max(commit_index_, log_base_index_);
+  last_applied_ = std::max(last_applied_, log_base_index_);
+  PersistMetadata();
+  PersistLog();
 }
 
 auto RaftNode::Propose(std::string command) -> ProposeResult {
@@ -412,9 +485,15 @@ auto RaftNode::HandlePeerAppendEntries(NodeId from,
   return BuildAppendEntriesResponse(from, request);
 }
 
+auto RaftNode::HandlePeerInstallSnapshot(
+    NodeId from, const InstallSnapshotRequest& request)
+    -> InstallSnapshotResponse {
+  return BuildInstallSnapshotResponse(from, request);
+}
+
 auto RaftNode::PersistMetadata() -> void {
   if (storage_) {
-    storage_->StoreMetadata(current_term_, voted_for_);
+    storage_->StoreMetadata(current_term_, voted_for_, log_base_index_, log_base_term_);
   }
 }
 
@@ -466,10 +545,10 @@ auto RaftNode::BuildAppendEntriesResponse(
         .term = current_term_, .success = false, .match_index = last_log_index()};
   }
 
-  if (log_[static_cast<std::size_t>(request.prev_log_index)].term !=
-      request.prev_log_term) {
+  const auto prev_term = TermAt(request.prev_log_index);
+  if (!prev_term.has_value() || prev_term.value() != request.prev_log_term) {
     return AppendEntriesResponse{
-        .term = current_term_, .success = false, .match_index = 0};
+        .term = current_term_, .success = false, .match_index = log_base_index_};
   }
 
   LogIndex index = request.prev_log_index + 1;
@@ -477,8 +556,12 @@ auto RaftNode::BuildAppendEntriesResponse(
   bool log_changed = false;
   while (entry_offset < request.entries.size() && index <= last_log_index()) {
     const auto& entry = request.entries[entry_offset];
-    if (log_[static_cast<std::size_t>(index)].term != entry.term) {
-      log_.resize(static_cast<std::size_t>(index));
+    const auto offset = LogOffset(index);
+    if (!offset.has_value() || log_[offset.value()].term != entry.term) {
+      if (offset.has_value()) {
+        const auto keep = std::max<std::size_t>(1U, offset.value());
+        log_.resize(keep);
+      }
       log_changed = true;
       break;
     }
@@ -505,6 +588,35 @@ auto RaftNode::BuildAppendEntriesResponse(
       request.prev_log_index + static_cast<LogIndex>(request.entries.size());
   return AppendEntriesResponse{
       .term = current_term_, .success = true, .match_index = appended_last};
+}
+
+auto RaftNode::BuildInstallSnapshotResponse(
+    NodeId /*from*/, const InstallSnapshotRequest& request)
+    -> InstallSnapshotResponse {
+  if (request.term < current_term_) {
+    return InstallSnapshotResponse{
+        .term = current_term_,
+        .success = false,
+        .last_included_index = log_base_index_,
+    };
+  }
+
+  if (request.term > current_term_ || role_ != Role::kFollower) {
+    BecomeFollower(request.term, request.leader_id);
+  }
+
+  leader_id_ = request.leader_id;
+  election_elapsed_ = 0;
+  InstallLocalSnapshot(SnapshotMetadata{
+      .last_included_index = request.last_included_index,
+      .last_included_term = request.last_included_term,
+  });
+
+  return InstallSnapshotResponse{
+      .term = current_term_,
+      .success = true,
+      .last_included_index = log_base_index_,
+  };
 }
 
 }  // namespace kvstore::raft

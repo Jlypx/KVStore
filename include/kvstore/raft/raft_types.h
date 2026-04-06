@@ -82,8 +82,23 @@ struct AppendEntriesResponse {
   LogIndex match_index = 0;
 };
 
+struct InstallSnapshotRequest {
+  Term term = 0;
+  NodeId leader_id = kNoLeader;
+  LogIndex last_included_index = 0;
+  Term last_included_term = 0;
+  std::string snapshot_payload;
+};
+
+struct InstallSnapshotResponse {
+  Term term = 0;
+  bool success = false;
+  LogIndex last_included_index = 0;
+};
+
 using Rpc = std::variant<RequestVoteRequest, RequestVoteResponse,
-                         AppendEntriesRequest, AppendEntriesResponse>;
+                         AppendEntriesRequest, AppendEntriesResponse,
+                         InstallSnapshotRequest, InstallSnapshotResponse>;
 
 struct Message {
   NodeId from = 0;

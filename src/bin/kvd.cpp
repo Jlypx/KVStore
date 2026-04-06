@@ -205,6 +205,10 @@ int main(int argc, char** argv) {
       [svc](kvstore::raft::NodeId from,
             const kvstore::raft::AppendEntriesRequest& request) {
         return svc->HandlePeerAppendEntries(from, request);
+      },
+      [svc](kvstore::raft::NodeId from,
+            const kvstore::raft::InstallSnapshotRequest& request) {
+        return svc->HandlePeerInstallSnapshot(from, request);
       });
 
   grpc::ServerBuilder client_builder;

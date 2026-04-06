@@ -15,6 +15,7 @@ auto ToTestClusterOptions(EmbeddedClusterOptions options) -> TestCluster::Option
   out.election_timeout_max_ticks = options.election_timeout_max_ticks;
   out.heartbeat_interval_ticks = options.heartbeat_interval_ticks;
   out.quorum_timeout_ticks = options.quorum_timeout_ticks;
+  out.snapshot_threshold_entries = options.snapshot_threshold_entries;
   out.storage_root = std::move(options.storage_root);
   return out;
 }
@@ -50,12 +51,12 @@ class EmbeddedRaftCluster final : public RaftCluster {
   TestCluster cluster_;
 };
 
-}
+}  // namespace
 
 auto CreateEmbeddedRaftCluster(EmbeddedClusterOptions options)
     -> std::unique_ptr<RaftCluster> {
   return std::make_unique<EmbeddedRaftCluster>(std::move(options));
 }
 
-}
-}
+}  // namespace raft
+}  // namespace kvstore

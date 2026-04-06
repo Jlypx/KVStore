@@ -47,6 +47,9 @@ class KvEngine {
   // This is a minimal v1 compaction suitable for tests and correctness.
   auto Compact() -> bool;
 
+  auto ExportSnapshotPayload(std::string* payload) -> bool;
+  auto InstallSnapshotPayload(std::string_view payload) -> bool;
+
   [[nodiscard]] auto recovery_stats() const -> WalReplayStats;
 
   [[nodiscard]] auto last_integrity_error() const

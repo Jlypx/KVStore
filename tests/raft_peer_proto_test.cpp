@@ -82,6 +82,37 @@ auto TestAppendEntriesResponseRoundTrip() -> bool {
                 "response decoded match_index should match");
 }
 
+auto TestInstallSnapshotRoundTrip() -> bool {
+  kvstore::raft::InstallSnapshotRequest request;
+  request.term = 12;
+  request.leader_id = 4;
+  request.last_included_index = 128;
+  request.last_included_term = 11;
+  request.snapshot_payload = "snapshot-bytes";
+
+  const auto proto = kvstore::raft::ToProto(request);
+  const auto decoded = kvstore::raft::FromProto(proto);
+
+  kvstore::raft::InstallSnapshotResponse response;
+  response.term = 12;
+  response.success = true;
+  response.last_included_index = 128;
+
+  const auto response_proto = kvstore::raft::ToProto(response);
+  const auto response_decoded = kvstore::raft::FromProto(response_proto);
+
+  return Expect(proto.term() == request.term, "snapshot proto term should match") &&
+         Expect(decoded.last_included_index == request.last_included_index,
+                "snapshot decoded last_included_index should match") &&
+         Expect(decoded.last_included_term == request.last_included_term,
+                "snapshot decoded last_included_term should match") &&
+         Expect(decoded.snapshot_payload == request.snapshot_payload,
+                "snapshot decoded payload should match") &&
+         Expect(response_decoded.success, "snapshot response success should match") &&
+         Expect(response_decoded.last_included_index == response.last_included_index,
+                "snapshot response last_included_index should match");
+}
+
 }  // namespace
 
 int main() {
@@ -92,6 +123,9 @@ int main() {
     return 1;
   }
   if (!TestAppendEntriesResponseRoundTrip()) {
+    return 1;
+  }
+  if (!TestInstallSnapshotRoundTrip()) {
     return 1;
   }
   return 0;

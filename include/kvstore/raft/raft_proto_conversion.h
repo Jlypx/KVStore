@@ -29,6 +29,16 @@ auto ToProto(const AppendEntriesResponse& response)
 auto FromProto(const kvstore::v1::AppendEntriesResponse& response)
     -> AppendEntriesResponse;
 
+auto ToProto(const InstallSnapshotRequest& request)
+    -> kvstore::v1::InstallSnapshotRequest;
+auto FromProto(const kvstore::v1::InstallSnapshotRequest& request)
+    -> InstallSnapshotRequest;
+
+auto ToProto(const InstallSnapshotResponse& response)
+    -> kvstore::v1::InstallSnapshotResponse;
+auto FromProto(const kvstore::v1::InstallSnapshotResponse& response)
+    -> InstallSnapshotResponse;
+
 }  // namespace kvstore::raft
 
 #endif  // KVSTORE_RAFT_RAFT_PROTO_CONVERSION_H

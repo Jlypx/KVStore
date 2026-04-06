@@ -96,4 +96,44 @@ auto FromProto(const kvstore::v1::AppendEntriesResponse& response)
   };
 }
 
+auto ToProto(const InstallSnapshotRequest& request)
+    -> kvstore::v1::InstallSnapshotRequest {
+  kvstore::v1::InstallSnapshotRequest proto;
+  proto.set_term(request.term);
+  proto.set_leader_id(request.leader_id);
+  proto.set_last_included_index(request.last_included_index);
+  proto.set_last_included_term(request.last_included_term);
+  proto.set_snapshot_payload(request.snapshot_payload);
+  return proto;
+}
+
+auto FromProto(const kvstore::v1::InstallSnapshotRequest& request)
+    -> InstallSnapshotRequest {
+  return InstallSnapshotRequest{
+      .term = request.term(),
+      .leader_id = request.leader_id(),
+      .last_included_index = request.last_included_index(),
+      .last_included_term = request.last_included_term(),
+      .snapshot_payload = request.snapshot_payload(),
+  };
+}
+
+auto ToProto(const InstallSnapshotResponse& response)
+    -> kvstore::v1::InstallSnapshotResponse {
+  kvstore::v1::InstallSnapshotResponse proto;
+  proto.set_term(response.term);
+  proto.set_success(response.success);
+  proto.set_last_included_index(response.last_included_index);
+  return proto;
+}
+
+auto FromProto(const kvstore::v1::InstallSnapshotResponse& response)
+    -> InstallSnapshotResponse {
+  return InstallSnapshotResponse{
+      .term = response.term(),
+      .success = response.success(),
+      .last_included_index = response.last_included_index(),
+  };
+}
+
 }  // namespace kvstore::raft

@@ -60,7 +60,7 @@ auto TestRaftStorageRoundTrip() -> bool {
       kvstore::raft::LogEntry{.term = 3, .command = "cmd-b"},
   };
 
-  if (!Expect(storage.StoreMetadata(3, 2), "metadata store should succeed") ||
+  if (!Expect(storage.StoreMetadata(3, 2, 10, 2), "metadata store should succeed") ||
       !Expect(storage.StoreLog(expected_log), "log store should succeed")) {
     return false;
   }
@@ -72,6 +72,10 @@ auto TestRaftStorageRoundTrip() -> bool {
 
   return Expect(loaded.current_term == 3, "current term should round-trip") &&
          Expect(loaded.voted_for == 2, "voted_for should round-trip") &&
+         Expect(loaded.snapshot_last_included_index == 10,
+                "snapshot index should round-trip") &&
+         Expect(loaded.snapshot_last_included_term == 2,
+                "snapshot term should round-trip") &&
          Expect(loaded.log.size() == expected_log.size(),
                 "log size should round-trip") &&
          Expect(loaded.log[1].command == "cmd-a", "first command should round-trip") &&
@@ -131,6 +135,73 @@ auto TestRaftNodeLoadsPersistedStateOnRestart() -> bool {
                 "restarted node should keep committed command");
 }
 
+auto TestLocalSnapshotTruncatesRaftPrefix() -> bool {
+  kvstore::raft::TestCluster::Options options;
+  options.node_ids = {1, 2, 3, 4, 5};
+  options.election_timeout_min_ticks = 5;
+  options.election_timeout_max_ticks = 10;
+  options.heartbeat_interval_ticks = 1;
+  options.quorum_timeout_ticks = 5;
+  options.snapshot_threshold_entries = 4;
+
+  kvstore::raft::TestCluster cluster(options);
+  const auto leader_id = cluster.WaitForLeader(200);
+  if (!Expect(leader_id.has_value(), "cluster should elect leader")) {
+    return false;
+  }
+  cluster.RunTicks(5);
+
+  auto* leader = cluster.node(*leader_id);
+  if (!Expect(leader != nullptr, "leader should exist")) {
+    return false;
+  }
+
+  kvstore::raft::LogIndex last_index = 0;
+  for (int i = 0; i < 8; ++i) {
+    const auto proposal = leader->Propose("snap-cmd-" + std::to_string(i));
+    if (!Expect(proposal.Ok(), "proposal before snapshot should succeed")) {
+      return false;
+    }
+    last_index = proposal.index;
+    if (!Expect(WaitForCommit(&cluster, options.node_ids, proposal.index, 200),
+                "proposal before snapshot should commit")) {
+      return false;
+    }
+  }
+
+  const auto before_snapshot_entry = leader->log_entry_at(1);
+  if (!Expect(before_snapshot_entry.has_value(),
+              "pre-snapshot entry should be present")) {
+    return false;
+  }
+
+  const auto suggested_snapshot = leader->MaybeSnapshotMetadata();
+  if (!Expect(suggested_snapshot.has_value(), "snapshot metadata should be available")) {
+    return false;
+  }
+  const auto snapshot_term_entry = leader->log_entry_at(last_index - 1);
+  if (!Expect(snapshot_term_entry.has_value(),
+              "snapshot boundary entry should be readable")) {
+    return false;
+  }
+  const kvstore::raft::SnapshotMetadata snapshot{
+      .last_included_index = last_index - 1,
+      .last_included_term = snapshot_term_entry->term,
+  };
+  leader->InstallLocalSnapshot(snapshot);
+
+  const auto old_entry = leader->log_entry_at(1);
+  const auto latest_entry = leader->log_entry_at(last_index);
+  return Expect(leader->snapshot_last_included_index() ==
+                    snapshot.last_included_index,
+                "snapshot base index should advance") &&
+         Expect(!old_entry.has_value(),
+                "entries before snapshot base should be truncated") &&
+         Expect(latest_entry.has_value() &&
+                    latest_entry->command == "snap-cmd-7",
+                "log suffix after snapshot should remain available");
+}
+
 }  // namespace
 
 int main() {
@@ -138,6 +209,9 @@ int main() {
     return 1;
   }
   if (!TestRaftNodeLoadsPersistedStateOnRestart()) {
+    return 1;
+  }
+  if (!TestLocalSnapshotTruncatesRaftPrefix()) {
     return 1;
   }
   return 0;

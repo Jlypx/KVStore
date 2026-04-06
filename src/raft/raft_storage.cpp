@@ -90,6 +90,8 @@ auto RaftStorage::Load(PersistentRaftState* out) -> bool {
   }
   out->current_term = 0;
   out->voted_for = kNoVote;
+  out->snapshot_last_included_index = 0;
+  out->snapshot_last_included_term = 0;
   out->log.clear();
 
   if (!EnsureDirectory()) {
@@ -106,9 +108,12 @@ auto RaftStorage::Load(PersistentRaftState* out) -> bool {
     std::uint16_t reserved = 0;
     std::uint64_t term = 0;
     std::uint32_t voted_for = 0;
+    std::uint64_t snapshot_index = 0;
+    std::uint64_t snapshot_term = 0;
     if (!ReadU32(&meta, &magic) || !ReadU16(&meta, &version) ||
         !ReadU16(&meta, &reserved) || !ReadU64(&meta, &term) ||
-        !ReadU32(&meta, &voted_for)) {
+        !ReadU32(&meta, &voted_for) || !ReadU64(&meta, &snapshot_index) ||
+        !ReadU64(&meta, &snapshot_term)) {
       return false;
     }
     if (magic != kMetaMagic || version != kMetaVersion) {
@@ -116,6 +121,8 @@ auto RaftStorage::Load(PersistentRaftState* out) -> bool {
     }
     out->current_term = term;
     out->voted_for = static_cast<NodeId>(voted_for);
+    out->snapshot_last_included_index = snapshot_index;
+    out->snapshot_last_included_term = snapshot_term;
   }
 
   if (std::filesystem::exists(log_path())) {
@@ -153,7 +160,9 @@ auto RaftStorage::Load(PersistentRaftState* out) -> bool {
   return true;
 }
 
-auto RaftStorage::StoreMetadata(Term term, NodeId voted_for) -> bool {
+auto RaftStorage::StoreMetadata(Term term, NodeId voted_for,
+                                LogIndex snapshot_last_included_index,
+                                Term snapshot_last_included_term) -> bool {
   if (!EnsureDirectory()) {
     return false;
   }
@@ -166,6 +175,8 @@ auto RaftStorage::StoreMetadata(Term term, NodeId voted_for) -> bool {
   WriteU16(&meta, 0);
   WriteU64(&meta, term);
   WriteU32(&meta, voted_for);
+  WriteU64(&meta, snapshot_last_included_index);
+  WriteU64(&meta, snapshot_last_included_term);
   meta.flush();
   return meta.good();
 }

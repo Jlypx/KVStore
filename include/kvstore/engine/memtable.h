@@ -70,6 +70,10 @@ class MemTable {
   // Clears only the key/value map, keeping request-id history for idempotency.
   auto ClearKvs() -> void;
 
+  [[nodiscard]] auto SnapshotRequestIds() const -> std::vector<std::string>;
+  auto RestoreSnapshotState(std::vector<MemTableEntrySnapshot> entries,
+                            std::vector<std::string> request_ids) -> void;
+
  private:
   std::unordered_map<std::string, ValueEntry> kv_;
   std::unordered_set<std::string> applied_request_ids_;

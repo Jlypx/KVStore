@@ -47,9 +47,13 @@ class ClusterNodeService final : public KvService {
   auto HandlePeerRequestVote(kvstore::raft::NodeId from,
                              const kvstore::raft::RequestVoteRequest& request)
       -> kvstore::raft::RequestVoteResponse;
- auto HandlePeerAppendEntries(kvstore::raft::NodeId from,
+  auto HandlePeerAppendEntries(kvstore::raft::NodeId from,
                                const kvstore::raft::AppendEntriesRequest& request)
       -> kvstore::raft::AppendEntriesResponse;
+  auto HandlePeerInstallSnapshot(
+      kvstore::raft::NodeId from,
+      const kvstore::raft::InstallSnapshotRequest& request)
+      -> kvstore::raft::InstallSnapshotResponse;
 
  [[nodiscard]] auto FindLeader() const -> std::optional<kvstore::raft::NodeId>;
   [[nodiscard]] auto self_id() const -> kvstore::raft::NodeId { return config_.self_id; }

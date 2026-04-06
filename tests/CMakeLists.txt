@@ -108,6 +108,12 @@ kvstore_apply_compiler_warnings(kvstore_cluster_config_test)
 kvstore_apply_sanitizers(kvstore_cluster_config_test)
 add_test(NAME kvstore_cluster_config_test COMMAND kvstore_cluster_config_test)
 
+add_executable(kvstore_snapshot_test snapshot_test.cpp)
+target_link_libraries(kvstore_snapshot_test PRIVATE kvstore_service)
+kvstore_apply_compiler_warnings(kvstore_snapshot_test)
+kvstore_apply_sanitizers(kvstore_snapshot_test)
+add_test(NAME kvstore_snapshot_test COMMAND kvstore_snapshot_test)
+
 if(KVSTORE_ENABLE_GRPC)
   add_executable(kvstore_cluster_node_smoke_test cluster_node_smoke_test.cpp)
   target_link_libraries(kvstore_cluster_node_smoke_test PRIVATE kvstore_peer_service)

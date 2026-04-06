@@ -37,6 +37,14 @@ auto StartPeerServer(kvstore::raft::RaftNode* node) -> PeerServerHandle {
       [node](kvstore::raft::NodeId from,
              const kvstore::raft::AppendEntriesRequest& request) {
         return node->HandlePeerAppendEntries(from, request);
+      },
+      [](kvstore::raft::NodeId /*from*/,
+         const kvstore::raft::InstallSnapshotRequest& request) {
+        return kvstore::raft::InstallSnapshotResponse{
+            .term = request.term,
+            .success = true,
+            .last_included_index = request.last_included_index,
+        };
       });
 
   grpc::ServerBuilder builder;

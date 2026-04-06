@@ -20,6 +20,7 @@ struct EmbeddedClusterOptions {
   std::uint64_t election_timeout_max_ticks = 20;
   std::uint64_t heartbeat_interval_ticks = 2;
   std::uint64_t quorum_timeout_ticks = 0;
+  std::uint64_t snapshot_threshold_entries = 32;
   std::filesystem::path storage_root;
 };
 

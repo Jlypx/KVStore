@@ -59,4 +59,27 @@ auto MemTable::SortedEntries() const
 
 auto MemTable::ClearKvs() -> void { kv_.clear(); }
 
+auto MemTable::SnapshotRequestIds() const -> std::vector<std::string> {
+  std::vector<std::string> out;
+  out.reserve(applied_request_ids_.size());
+  for (const auto& request_id : applied_request_ids_) {
+    out.push_back(request_id);
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+auto MemTable::RestoreSnapshotState(std::vector<MemTableEntrySnapshot> entries,
+                                    std::vector<std::string> request_ids) -> void {
+  kv_.clear();
+  applied_request_ids_.clear();
+  for (auto& entry : entries) {
+    kv_[entry.key] = ValueEntry{.tombstone = entry.tombstone,
+                                .value = std::move(entry.value)};
+  }
+  for (auto& request_id : request_ids) {
+    applied_request_ids_.insert(std::move(request_id));
+  }
+}
+
 }  // namespace kvstore::engine

@@ -28,6 +28,7 @@ struct RaftNodeConfig {
 
   // If 0, defaults to election_timeout_ticks_min.
   std::uint64_t quorum_timeout_ticks = 0;
+  std::uint64_t snapshot_threshold_entries = 32;
 
   std::uint32_t random_seed = 0;
   std::filesystem::path storage_dir;
@@ -57,6 +58,8 @@ class RaftNode {
       -> RequestVoteResponse;
   auto HandlePeerAppendEntries(NodeId from, const AppendEntriesRequest& request)
       -> AppendEntriesResponse;
+  auto HandlePeerInstallSnapshot(NodeId from, const InstallSnapshotRequest& request)
+      -> InstallSnapshotResponse;
 
   auto SetOnCommitted(CommitCallback callback) -> void {
     on_committed_ = std::move(callback);
@@ -71,13 +74,19 @@ class RaftNode {
   [[nodiscard]] auto current_term() const -> Term { return current_term_; }
   [[nodiscard]] auto leader_id() const -> NodeId { return leader_id_; }
   [[nodiscard]] auto voted_for() const -> NodeId { return voted_for_; }
+  [[nodiscard]] auto snapshot_last_included_index() const -> LogIndex {
+    return log_base_index_;
+  }
+  [[nodiscard]] auto snapshot_last_included_term() const -> Term {
+    return log_base_term_;
+  }
   [[nodiscard]] auto committed_index() const -> LogIndex { return commit_index_; }
   [[nodiscard]] auto last_applied_index() const -> LogIndex {
     return last_applied_;
   }
 
   [[nodiscard]] auto last_log_index() const -> LogIndex {
-    return static_cast<LogIndex>(log_.size() - 1U);
+    return log_base_index_ + static_cast<LogIndex>(log_.size() - 1U);
   }
 
   [[nodiscard]] auto last_log_term() const -> Term { return log_.back().term; }
@@ -86,6 +95,8 @@ class RaftNode {
 
   [[nodiscard]] auto log_entry_at(LogIndex index) const
       -> std::optional<LogEntry>;
+  [[nodiscard]] auto MaybeSnapshotMetadata() const -> std::optional<SnapshotMetadata>;
+  auto InstallLocalSnapshot(const SnapshotMetadata& metadata) -> void;
 
  private:
   [[nodiscard]] auto ClusterSize() const -> std::size_t {
@@ -114,12 +125,17 @@ class RaftNode {
 
   [[nodiscard]] auto IsLogUpToDate(LogIndex last_index, Term last_term) const
       -> bool;
+  [[nodiscard]] auto LogOffset(LogIndex index) const -> std::optional<std::size_t>;
+  [[nodiscard]] auto TermAt(LogIndex index) const -> std::optional<Term>;
   auto BuildRequestVoteResponse(NodeId from,
                                 const RequestVoteRequest& request)
       -> RequestVoteResponse;
   auto BuildAppendEntriesResponse(NodeId from,
                                   const AppendEntriesRequest& request)
       -> AppendEntriesResponse;
+  auto BuildInstallSnapshotResponse(NodeId from,
+                                    const InstallSnapshotRequest& request)
+      -> InstallSnapshotResponse;
 
   auto LeaderSendAppendEntries(NodeId follower_id) -> void;
   auto LeaderBroadcastHeartbeats() -> void;
@@ -139,8 +155,10 @@ class RaftNode {
   Term current_term_ = 0;
   NodeId voted_for_ = kNoVote;
   NodeId leader_id_ = kNoLeader;
+  LogIndex log_base_index_ = 0;
+  Term log_base_term_ = 0;
 
-  // Raft log. Index 0 is a dummy entry with term=0.
+  // Raft log. Index 0 is the snapshot/base entry with logical index log_base_index_.
   std::vector<LogEntry> log_;
 
   LogIndex commit_index_ = 0;

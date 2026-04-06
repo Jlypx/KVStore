@@ -5,9 +5,11 @@
 namespace kvstore::service {
 
 RaftPeerService::RaftPeerService(RequestVoteHandler request_vote_handler,
-                                 AppendEntriesHandler append_entries_handler)
+                                 AppendEntriesHandler append_entries_handler,
+                                 InstallSnapshotHandler install_snapshot_handler)
     : request_vote_handler_(std::move(request_vote_handler)),
-      append_entries_handler_(std::move(append_entries_handler)) {}
+      append_entries_handler_(std::move(append_entries_handler)),
+      install_snapshot_handler_(std::move(install_snapshot_handler)) {}
 
 auto RaftPeerService::RequestVote(grpc::ServerContext* /*context*/,
                                   const kvstore::v1::RequestVoteRequest* request,
@@ -27,6 +29,17 @@ auto RaftPeerService::AppendEntries(
   const auto internal_request = kvstore::raft::FromProto(*request);
   const auto internal_response =
       append_entries_handler_(internal_request.leader_id, internal_request);
+  *response = kvstore::raft::ToProto(internal_response);
+  return grpc::Status::OK;
+}
+
+auto RaftPeerService::InstallSnapshot(
+    grpc::ServerContext* /*context*/,
+    const kvstore::v1::InstallSnapshotRequest* request,
+    kvstore::v1::InstallSnapshotResponse* response) -> grpc::Status {
+  const auto internal_request = kvstore::raft::FromProto(*request);
+  const auto internal_response =
+      install_snapshot_handler_(internal_request.leader_id, internal_request);
   *response = kvstore::raft::ToProto(internal_response);
   return grpc::Status::OK;
 }

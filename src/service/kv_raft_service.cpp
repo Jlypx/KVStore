@@ -209,6 +209,7 @@ struct KvRaftService::Impl {
     ro.election_timeout_max_ticks = options_.election_timeout_max_ticks;
     ro.heartbeat_interval_ticks = options_.heartbeat_interval_ticks;
     ro.quorum_timeout_ticks = options_.quorum_timeout_ticks;
+    ro.snapshot_threshold_entries = options_.snapshot_threshold_entries;
     ro.storage_root = data_dir_;
 
     cluster = kvstore::raft::CreateEmbeddedRaftCluster(ro);
@@ -235,6 +236,46 @@ struct KvRaftService::Impl {
           [this, id](std::vector<kvstore::raft::CommittedEntry> entries) {
             this->OnCommitted(id, std::move(entries));
           });
+      raft_node->SetSnapshotHooks(kvstore::raft::SnapshotHooks{
+          .on_snapshot_send_requested =
+              [this, id](kvstore::raft::NodeId target,
+                         const kvstore::raft::SnapshotMetadata& base) {
+                auto source_it = nodes.find(id);
+                auto target_it = nodes.find(target);
+                if (source_it == nodes.end() || target_it == nodes.end() ||
+                    !source_it->second.engine || !target_it->second.engine || !cluster) {
+                  return;
+                }
+                if (!cluster->IsNodeUp(target)) {
+                  return;
+                }
+                auto* source_node = cluster->node(id);
+                auto* target_node = cluster->node(target);
+                if (source_node == nullptr || target_node == nullptr) {
+                  return;
+                }
+
+                std::string payload;
+                if (!source_it->second.engine->ExportSnapshotPayload(&payload)) {
+                  return;
+                }
+                if (!target_it->second.engine->InstallSnapshotPayload(payload)) {
+                  return;
+                }
+                const auto response = target_node->HandlePeerInstallSnapshot(
+                    id, kvstore::raft::InstallSnapshotRequest{
+                            .term = source_node->current_term(),
+                            .leader_id = id,
+                            .last_included_index = base.last_included_index,
+                            .last_included_term = base.last_included_term,
+                            .snapshot_payload = std::move(payload),
+                        });
+                source_node->Step(kvstore::raft::Message{
+                    .from = target,
+                    .to = id,
+                    .rpc = kvstore::raft::Rpc{response},
+                });
+              }});
     }
 
     // Elect a leader and ensure quorum-contact gate is warm before serving.
@@ -337,6 +378,7 @@ struct KvRaftService::Impl {
         }
       }
     }
+
   }
 
   auto LeaderNodeLocked() -> std::pair<kvstore::raft::NodeId, kvstore::raft::RaftNode*> {
@@ -575,6 +617,27 @@ auto KvRaftService::FindLeader() const -> std::optional<kvstore::raft::NodeId> {
     return std::nullopt;
   }
   return impl_->cluster->FindLeader();
+}
+
+auto KvRaftService::ForceLeaderSnapshotForTesting() -> bool {
+  std::lock_guard<std::mutex> lock(impl_->mu);
+  if (!impl_->cluster) {
+    return false;
+  }
+  const auto leader_id = impl_->cluster->FindLeader();
+  if (!leader_id.has_value()) {
+    return false;
+  }
+  auto* leader = impl_->cluster->node(*leader_id);
+  if (leader == nullptr) {
+    return false;
+  }
+  const auto snapshot = leader->MaybeSnapshotMetadata();
+  if (!snapshot.has_value()) {
+    return false;
+  }
+  leader->InstallLocalSnapshot(snapshot.value());
+  return true;
 }
 
 }  // namespace kvstore::service

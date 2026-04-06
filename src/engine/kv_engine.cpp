@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 
 namespace kvstore::engine {
@@ -63,6 +64,54 @@ auto FormatWalFilename(std::uint64_t generation) -> std::string {
   }
   return out + ".wal";
 }
+
+constexpr std::uint32_t kSnapshotMagic = 0x4b565353U;
+constexpr std::uint16_t kSnapshotVersion = 1;
+
+auto WriteSnapshotU16(std::string* out, std::uint16_t value) -> void {
+  out->push_back(static_cast<char>(value & 0xffU));
+  out->push_back(static_cast<char>((value >> 8U) & 0xffU));
+}
+
+auto WriteSnapshotU32(std::string* out, std::uint32_t value) -> void {
+  out->push_back(static_cast<char>(value & 0xffU));
+  out->push_back(static_cast<char>((value >> 8U) & 0xffU));
+  out->push_back(static_cast<char>((value >> 16U) & 0xffU));
+  out->push_back(static_cast<char>((value >> 24U) & 0xffU));
+}
+
+auto ReadSnapshotU16(std::string_view in, std::size_t* offset, std::uint16_t* out)
+    -> bool {
+  if (*offset + 2 > in.size()) {
+    return false;
+  }
+  const unsigned char* p =
+      reinterpret_cast<const unsigned char*>(in.data() + *offset);
+  *out = static_cast<std::uint16_t>(p[0]) |
+         (static_cast<std::uint16_t>(p[1]) << 8U);
+  *offset += 2;
+  return true;
+}
+
+auto ReadSnapshotU32(std::string_view in, std::size_t* offset, std::uint32_t* out)
+    -> bool {
+  if (*offset + 4 > in.size()) {
+    return false;
+  }
+  const unsigned char* p =
+      reinterpret_cast<const unsigned char*>(in.data() + *offset);
+  *out = static_cast<std::uint32_t>(p[0]) |
+         (static_cast<std::uint32_t>(p[1]) << 8U) |
+         (static_cast<std::uint32_t>(p[2]) << 16U) |
+         (static_cast<std::uint32_t>(p[3]) << 24U);
+  *offset += 4;
+  return true;
+}
+
+struct SnapshotValue {
+  bool tombstone = false;
+  std::string value;
+};
 
 }  // namespace
 
@@ -269,6 +318,165 @@ auto KvEngine::Compact() -> bool {
   sstables_.clear();
   sstables_.push_back(
       SstableFile{.path = output_path, .reader = std::move(output_reader)});
+  return true;
+}
+
+auto KvEngine::ExportSnapshotPayload(std::string* payload) -> bool {
+  if (payload == nullptr) {
+    return false;
+  }
+  last_integrity_error_.reset();
+
+  std::unordered_map<std::string, SnapshotValue> merged;
+
+  for (const auto& sstable : sstables_) {
+    std::vector<SstEntry> entries;
+    integrity::IntegrityError scan_error;
+    if (!sstable.reader.ScanAllEntries(&entries, &scan_error)) {
+      last_integrity_error_ = scan_error;
+      return false;
+    }
+    for (const auto& entry : entries) {
+      merged[entry.key] = SnapshotValue{.tombstone = entry.tombstone,
+                                        .value = entry.value};
+    }
+  }
+
+  for (const auto& entry : memtable_.SortedEntries()) {
+    merged[entry.key] = SnapshotValue{.tombstone = entry.tombstone,
+                                      .value = entry.value};
+  }
+
+  std::vector<std::pair<std::string, std::string>> live_entries;
+  live_entries.reserve(merged.size());
+  for (const auto& [key, value] : merged) {
+    if (!value.tombstone) {
+      live_entries.emplace_back(key, value.value);
+    }
+  }
+  std::sort(live_entries.begin(), live_entries.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+
+  const auto request_ids = memtable_.SnapshotRequestIds();
+  std::string encoded;
+  encoded.reserve(16);
+  WriteSnapshotU32(&encoded, kSnapshotMagic);
+  WriteSnapshotU16(&encoded, kSnapshotVersion);
+  WriteSnapshotU32(&encoded, static_cast<std::uint32_t>(live_entries.size()));
+  for (const auto& [key, value] : live_entries) {
+    WriteSnapshotU32(&encoded, static_cast<std::uint32_t>(key.size()));
+    WriteSnapshotU32(&encoded, static_cast<std::uint32_t>(value.size()));
+    encoded.append(key);
+    encoded.append(value);
+  }
+  WriteSnapshotU32(&encoded, static_cast<std::uint32_t>(request_ids.size()));
+  for (const auto& request_id : request_ids) {
+    WriteSnapshotU32(&encoded, static_cast<std::uint32_t>(request_id.size()));
+    encoded.append(request_id);
+  }
+
+  *payload = std::move(encoded);
+  return true;
+}
+
+auto KvEngine::InstallSnapshotPayload(std::string_view payload) -> bool {
+  last_integrity_error_.reset();
+
+  std::size_t offset = 0;
+  std::uint32_t magic = 0;
+  std::uint16_t version = 0;
+  std::uint32_t kv_count = 0;
+  if (!ReadSnapshotU32(payload, &offset, &magic) ||
+      !ReadSnapshotU16(payload, &offset, &version) ||
+      !ReadSnapshotU32(payload, &offset, &kv_count)) {
+    return false;
+  }
+  if (magic != kSnapshotMagic || version != kSnapshotVersion) {
+    return false;
+  }
+
+  std::vector<SstEntry> snapshot_entries;
+  snapshot_entries.reserve(kv_count);
+  for (std::uint32_t i = 0; i < kv_count; ++i) {
+    std::uint32_t key_size = 0;
+    std::uint32_t value_size = 0;
+    if (!ReadSnapshotU32(payload, &offset, &key_size) ||
+        !ReadSnapshotU32(payload, &offset, &value_size) ||
+        offset + key_size + value_size > payload.size()) {
+      return false;
+    }
+    std::string key(payload.substr(offset, key_size));
+    offset += key_size;
+    std::string value(payload.substr(offset, value_size));
+    offset += value_size;
+    snapshot_entries.push_back(
+        SstEntry{.key = std::move(key), .value = std::move(value), .tombstone = false});
+  }
+
+  std::uint32_t request_id_count = 0;
+  if (!ReadSnapshotU32(payload, &offset, &request_id_count)) {
+    return false;
+  }
+  std::vector<std::string> request_ids;
+  request_ids.reserve(request_id_count);
+  for (std::uint32_t i = 0; i < request_id_count; ++i) {
+    std::uint32_t size = 0;
+    if (!ReadSnapshotU32(payload, &offset, &size) || offset + size > payload.size()) {
+      return false;
+    }
+    request_ids.emplace_back(payload.substr(offset, size));
+    offset += size;
+  }
+  if (offset != payload.size()) {
+    return false;
+  }
+
+  std::error_code ec;
+  for (const auto& segment : DiscoverWalSegments(wal_path_)) {
+    std::filesystem::remove(segment, ec);
+    if (ec) {
+      return false;
+    }
+  }
+  for (const auto& entry : std::filesystem::directory_iterator(sst_dir_, ec)) {
+    if (ec) {
+      return false;
+    }
+    if (entry.is_regular_file() && entry.path().extension() == ".sst") {
+      std::filesystem::remove(entry.path(), ec);
+      if (ec) {
+        return false;
+      }
+    }
+  }
+
+  memtable_.RestoreSnapshotState({}, request_ids);
+  sstables_.clear();
+  next_sst_id_ = 1;
+  next_wal_generation_ = 1;
+  wal_path_ = wal_path_.parent_path() / FormatWalFilename(1);
+
+  if (!snapshot_entries.empty()) {
+    integrity::IntegrityError write_error;
+    const auto snapshot_sst = NextSstPath();
+    if (!SstWriter::Write(snapshot_sst, snapshot_entries,
+                          SstWriteOptions{.target_block_size = 4096},
+                          &write_error)) {
+      last_integrity_error_ = write_error;
+      return false;
+    }
+  }
+
+  if (!LoadSstables()) {
+    return false;
+  }
+
+  integrity::IntegrityError open_error;
+  if (!wal_writer_.Open(wal_path_, &open_error)) {
+    last_integrity_error_ = open_error;
+    return false;
+  }
+
   return true;
 }
 

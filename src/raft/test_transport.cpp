@@ -38,6 +38,7 @@ TestCluster::TestCluster(Options options) : options_(std::move(options)) {
     config.election_timeout_ticks_max = options_.election_timeout_max_ticks;
     config.heartbeat_interval_ticks = options_.heartbeat_interval_ticks;
     config.quorum_timeout_ticks = options_.quorum_timeout_ticks;
+    config.snapshot_threshold_entries = options_.snapshot_threshold_entries;
     config.random_seed = static_cast<std::uint32_t>(id * 97U + 3U);
     if (!options_.storage_root.empty()) {
       config.storage_dir =

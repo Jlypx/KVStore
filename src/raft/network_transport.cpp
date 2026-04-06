@@ -79,6 +79,22 @@ auto NetworkTransport::Send(Message message) -> void {
           .to = local_id,
           .rpc = Rpc{FromProto(response)},
       });
+      return;
+    }
+
+    if (std::holds_alternative<InstallSnapshotRequest>(message.rpc)) {
+      grpc::ClientContext context;
+      const auto request = ToProto(std::get<InstallSnapshotRequest>(message.rpc));
+      kvstore::v1::InstallSnapshotResponse response;
+      const auto status = stub->InstallSnapshot(&context, request, &response);
+      if (!status.ok()) {
+        return;
+      }
+      handler(Message{
+          .from = message.to,
+          .to = local_id,
+          .rpc = Rpc{FromProto(response)},
+      });
     }
   }).detach();
 }
