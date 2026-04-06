@@ -182,28 +182,7 @@ auto RaftNode::IsLogUpToDate(LogIndex last_index, Term last_term) const -> bool 
 
 auto RaftNode::HandleRequestVote(NodeId from,
                                  const RequestVoteRequest& request) -> void {
-  if (request.term < current_term_) {
-    SendTo(from, Rpc{RequestVoteResponse{.term = current_term_,
-                                        .vote_granted = false}});
-    return;
-  }
-
-  if (request.term > current_term_) {
-    BecomeFollower(request.term, kNoLeader);
-  }
-
-  const bool can_vote = (voted_for_ == kNoVote || voted_for_ == request.candidate_id);
-  const bool up_to_date = IsLogUpToDate(request.last_log_index, request.last_log_term);
-  const bool grant = can_vote && up_to_date;
-
-  if (grant) {
-    voted_for_ = request.candidate_id;
-    PersistMetadata();
-    election_elapsed_ = 0;
-  }
-
-  SendTo(from, Rpc{RequestVoteResponse{.term = current_term_,
-                                      .vote_granted = grant}});
+  SendTo(from, Rpc{BuildRequestVoteResponse(from, request)});
 }
 
 auto RaftNode::HandleRequestVoteResponse(
@@ -233,72 +212,7 @@ auto RaftNode::HandleRequestVoteResponse(
 
 auto RaftNode::HandleAppendEntries(NodeId from,
                                    const AppendEntriesRequest& request) -> void {
-  if (request.term < current_term_) {
-    SendTo(from,
-           Rpc{AppendEntriesResponse{.term = current_term_,
-                                    .success = false,
-                                    .match_index = 0}});
-    return;
-  }
-
-  if (request.term > current_term_ || role_ != Role::kFollower) {
-    BecomeFollower(request.term, request.leader_id);
-  }
-
-  leader_id_ = request.leader_id;
-  election_elapsed_ = 0;
-
-  if (request.prev_log_index > last_log_index()) {
-    SendTo(from,
-           Rpc{AppendEntriesResponse{.term = current_term_,
-                                    .success = false,
-                                    .match_index = last_log_index()}});
-    return;
-  }
-
-  if (log_[static_cast<std::size_t>(request.prev_log_index)].term !=
-      request.prev_log_term) {
-    SendTo(from,
-           Rpc{AppendEntriesResponse{.term = current_term_,
-                                    .success = false,
-                                    .match_index = 0}});
-    return;
-  }
-
-  LogIndex index = request.prev_log_index + 1;
-  std::size_t entry_offset = 0;
-  bool log_changed = false;
-  while (entry_offset < request.entries.size() && index <= last_log_index()) {
-    const auto& entry = request.entries[entry_offset];
-    if (log_[static_cast<std::size_t>(index)].term != entry.term) {
-      log_.resize(static_cast<std::size_t>(index));
-      log_changed = true;
-      break;
-    }
-    index += 1;
-    entry_offset += 1;
-  }
-
-  while (entry_offset < request.entries.size()) {
-    log_.push_back(request.entries[entry_offset]);
-    entry_offset += 1;
-    log_changed = true;
-  }
-
-  if (log_changed) {
-    PersistLog();
-  }
-
-  if (request.leader_commit > commit_index_) {
-    commit_index_ = std::min(request.leader_commit, last_log_index());
-    ApplyCommitted();
-  }
-
-  const LogIndex appended_last =
-      request.prev_log_index + static_cast<LogIndex>(request.entries.size());
-  SendTo(from, Rpc{AppendEntriesResponse{.term = current_term_,
-                                        .success = true,
-                                        .match_index = appended_last}});
+  SendTo(from, Rpc{BuildAppendEntriesResponse(from, request)});
 }
 
 auto RaftNode::LeaderSendAppendEntries(NodeId follower_id) -> void {
@@ -486,6 +400,18 @@ auto RaftNode::Propose(std::string command) -> ProposeResult {
   return result;
 }
 
+auto RaftNode::HandlePeerRequestVote(NodeId from,
+                                     const RequestVoteRequest& request)
+    -> RequestVoteResponse {
+  return BuildRequestVoteResponse(from, request);
+}
+
+auto RaftNode::HandlePeerAppendEntries(NodeId from,
+                                       const AppendEntriesRequest& request)
+    -> AppendEntriesResponse {
+  return BuildAppendEntriesResponse(from, request);
+}
+
 auto RaftNode::PersistMetadata() -> void {
   if (storage_) {
     storage_->StoreMetadata(current_term_, voted_for_);
@@ -496,6 +422,89 @@ auto RaftNode::PersistLog() -> void {
   if (storage_) {
     storage_->StoreLog(log_);
   }
+}
+
+auto RaftNode::BuildRequestVoteResponse(
+    NodeId /*from*/, const RequestVoteRequest& request) -> RequestVoteResponse {
+  if (request.term < current_term_) {
+    return RequestVoteResponse{.term = current_term_, .vote_granted = false};
+  }
+
+  if (request.term > current_term_) {
+    BecomeFollower(request.term, kNoLeader);
+  }
+
+  const bool can_vote = (voted_for_ == kNoVote || voted_for_ == request.candidate_id);
+  const bool up_to_date = IsLogUpToDate(request.last_log_index, request.last_log_term);
+  const bool grant = can_vote && up_to_date;
+
+  if (grant) {
+    voted_for_ = request.candidate_id;
+    PersistMetadata();
+    election_elapsed_ = 0;
+  }
+
+  return RequestVoteResponse{.term = current_term_, .vote_granted = grant};
+}
+
+auto RaftNode::BuildAppendEntriesResponse(
+    NodeId /*from*/, const AppendEntriesRequest& request) -> AppendEntriesResponse {
+  if (request.term < current_term_) {
+    return AppendEntriesResponse{
+        .term = current_term_, .success = false, .match_index = 0};
+  }
+
+  if (request.term > current_term_ || role_ != Role::kFollower) {
+    BecomeFollower(request.term, request.leader_id);
+  }
+
+  leader_id_ = request.leader_id;
+  election_elapsed_ = 0;
+
+  if (request.prev_log_index > last_log_index()) {
+    return AppendEntriesResponse{
+        .term = current_term_, .success = false, .match_index = last_log_index()};
+  }
+
+  if (log_[static_cast<std::size_t>(request.prev_log_index)].term !=
+      request.prev_log_term) {
+    return AppendEntriesResponse{
+        .term = current_term_, .success = false, .match_index = 0};
+  }
+
+  LogIndex index = request.prev_log_index + 1;
+  std::size_t entry_offset = 0;
+  bool log_changed = false;
+  while (entry_offset < request.entries.size() && index <= last_log_index()) {
+    const auto& entry = request.entries[entry_offset];
+    if (log_[static_cast<std::size_t>(index)].term != entry.term) {
+      log_.resize(static_cast<std::size_t>(index));
+      log_changed = true;
+      break;
+    }
+    index += 1;
+    entry_offset += 1;
+  }
+
+  while (entry_offset < request.entries.size()) {
+    log_.push_back(request.entries[entry_offset]);
+    entry_offset += 1;
+    log_changed = true;
+  }
+
+  if (log_changed) {
+    PersistLog();
+  }
+
+  if (request.leader_commit > commit_index_) {
+    commit_index_ = std::min(request.leader_commit, last_log_index());
+    ApplyCommitted();
+  }
+
+  const LogIndex appended_last =
+      request.prev_log_index + static_cast<LogIndex>(request.entries.size());
+  return AppendEntriesResponse{
+      .term = current_term_, .success = true, .match_index = appended_last};
 }
 
 }  // namespace kvstore::raft

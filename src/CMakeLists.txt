@@ -93,11 +93,20 @@ if(KVSTORE_ENABLE_GRPC)
 
   add_library(kvstore_raft_transport
     raft/raft_proto_conversion.cpp
+    raft/network_transport.cpp
   )
   target_include_directories(kvstore_raft_transport PUBLIC ${PROJECT_SOURCE_DIR}/include)
   target_link_libraries(kvstore_raft_transport PUBLIC kvstore_core kvstore_raft_proto)
   kvstore_apply_compiler_warnings(kvstore_raft_transport)
   kvstore_apply_sanitizers(kvstore_raft_transport)
+
+  add_library(kvstore_peer_service
+    service/raft_peer_service.cpp
+  )
+  target_include_directories(kvstore_peer_service PUBLIC ${PROJECT_SOURCE_DIR}/include)
+  target_link_libraries(kvstore_peer_service PUBLIC kvstore_raft_transport)
+  kvstore_apply_compiler_warnings(kvstore_peer_service)
+  kvstore_apply_sanitizers(kvstore_peer_service)
 
   add_library(kvstore_service
     raft/cluster_runtime.cpp

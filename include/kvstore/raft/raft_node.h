@@ -53,6 +53,11 @@ class RaftNode {
 
   auto Propose(std::string command) -> ProposeResult;
 
+  auto HandlePeerRequestVote(NodeId from, const RequestVoteRequest& request)
+      -> RequestVoteResponse;
+  auto HandlePeerAppendEntries(NodeId from, const AppendEntriesRequest& request)
+      -> AppendEntriesResponse;
+
   auto SetOnCommitted(CommitCallback callback) -> void {
     on_committed_ = std::move(callback);
   }
@@ -109,6 +114,12 @@ class RaftNode {
 
   [[nodiscard]] auto IsLogUpToDate(LogIndex last_index, Term last_term) const
       -> bool;
+  auto BuildRequestVoteResponse(NodeId from,
+                                const RequestVoteRequest& request)
+      -> RequestVoteResponse;
+  auto BuildAppendEntriesResponse(NodeId from,
+                                  const AppendEntriesRequest& request)
+      -> AppendEntriesResponse;
 
   auto LeaderSendAppendEntries(NodeId follower_id) -> void;
   auto LeaderBroadcastHeartbeats() -> void;
