@@ -111,6 +111,8 @@ auto BuildSerializedRecord(const WalRecord& record) -> std::vector<std::byte> {
   const auto checksum =
       integrity::ComputeCrc32c(checksum_input.data(), checksum_input.size());
 
+  // Layout is [fixed header without checksum][crc32c][payload]. The checksum is
+  // over the header prefix plus payload, so length fields are protected too.
   std::vector<std::byte> encoded;
   encoded.reserve(kWalHeaderSize + payload.size());
   encoded.insert(encoded.end(), header_without_checksum.begin(),
@@ -233,6 +235,8 @@ auto DiscoverWalSegments(const std::filesystem::path& wal_path)
     ordered.emplace_back(ParseWalGeneration(wal_path).value_or(1), wal_path);
   }
 
+  // Sort by numeric generation, not lexicographic path order, so replay always
+  // reconstructs state in the original append sequence.
   std::sort(ordered.begin(), ordered.end(),
             [](const auto& a, const auto& b) { return a.first < b.first; });
 
@@ -301,6 +305,8 @@ auto WalWriter::Append(const WalRecord& record, integrity::IntegrityError* error
     return false;
   }
 
+  // Flush + fsync on every append keeps durability semantics simple. Throughput
+  // is lower, but the repo deliberately optimizes for correctness first.
   if (!SyncWalPath(wal_path_, error)) {
     return false;
   }
@@ -372,6 +378,8 @@ auto WalReader::Replay(const std::filesystem::path& wal_path,
     const auto request_id_size = static_cast<std::size_t>(ReadLe32(header, 16));
     const auto stored_checksum = ReadLe32(header, 20);
 
+    // Enforce the same v1 limits used on the write path before allocating the
+    // payload buffer, so malformed files fail fast instead of over-consuming.
     if (key_size > 1024U || value_size > 1024U * 1024U ||
         request_id_size > 4U * 1024U) {
       out->error = MakeError(integrity::IntegrityErrorCode::kInvalidRecord,
@@ -427,6 +435,8 @@ auto WalReader::Replay(const std::filesystem::path& wal_path,
     record.request_id =
         CopyBytesToString(payload, key_size + value_size, request_id_size);
 
+    // Replay is strict: any corruption aborts recovery instead of skipping ahead,
+    // because the engine treats WAL integrity failures as fatal.
     callback(record);
     out->stats.records_replayed += 1;
     record_index += 1;

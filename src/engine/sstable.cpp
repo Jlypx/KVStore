@@ -103,6 +103,8 @@ auto ReadExactly(std::ifstream* stream, std::vector<std::byte>* out,
 }
 
 auto BuildBlockFrame(const std::vector<std::byte>& payload) -> std::vector<std::byte> {
+  // Every data/index block is framed as [payload_size][payload][crc32c(payload)].
+  // The reader verifies the frame before handing bytes to higher-level parsers.
   std::vector<std::byte> frame;
   frame.reserve(sizeof(std::uint32_t) + payload.size() + sizeof(std::uint32_t));
   PutLe32(&frame, static_cast<std::uint32_t>(payload.size()));
@@ -128,6 +130,8 @@ auto ParseDataBlockGet(std::string_view key, const std::vector<std::byte>& paylo
     -> ParsedGet {
   ParsedGet out;
   std::size_t offset = 0;
+  // Data block entry layout:
+  // [u8 kind][u32 key_size][u32 value_size][key bytes][value bytes?]
   while (offset + 9U <= payload.size()) {
     const auto kind = static_cast<std::uint8_t>(payload[offset]);
     if (!IsValidEntryKind(kind)) {
@@ -268,6 +272,8 @@ auto SstWriter::Write(const std::filesystem::path& path,
     if (current_payload.empty()) {
       return true;
     }
+    // Record the first key for binary-search routing, then emit the fully
+    // checksummed frame to disk.
     const auto frame = BuildBlockFrame(current_payload);
     const auto frame_size = static_cast<std::uint32_t>(frame.size());
     if (!WriteAll(&out, frame)) {
@@ -319,6 +325,8 @@ auto SstWriter::Write(const std::filesystem::path& path,
     if (current_payload.empty()) {
       current_first_key = key;
     }
+    // Keep blocks roughly near target_block_size while never splitting an entry
+    // across frames. A single large entry still occupies its own block.
     if (!current_payload.empty() && current_payload.size() + entry.size() > max_payload) {
       if (!flush_block(block_index)) {
         return false;
@@ -573,6 +581,8 @@ auto SstReader::Open(const std::filesystem::path& path,
   const auto block_count = static_cast<std::size_t>(ReadLe32(payload, 0));
   std::size_t offset = 4U;
   index_.reserve(block_count);
+  // The full block index is loaded eagerly so point lookups only need a binary
+  // search plus one block read.
   for (std::size_t i = 0; i < block_count; ++i) {
     if (offset + 4U > payload.size()) {
       if (error != nullptr) {
@@ -706,6 +716,7 @@ auto SstReader::ReadAndVerifyBlockFrame(
     return false;
   }
 
+  // Only verified payloads are returned (and later inserted into BlockCache).
   if (payload != nullptr) {
     *payload = std::move(local_payload);
   }
@@ -732,6 +743,8 @@ auto SstReader::Get(const std::string& key) const -> SstGetResult {
     if (block_cache_->Get(cache_key, &payload)) {
       have_payload = true;
     } else {
+      // Cache stores decoded block payload, not the framed bytes, so subsequent
+      // lookups skip both disk IO and checksum verification work.
       if (!ReadAndVerifyBlockFrame(entry.block_offset, entry.block_frame_size,
                                    &payload, &error)) {
         error.record_index = block_index.value();
@@ -785,6 +798,8 @@ auto SstReader::ScanAllEntries(std::vector<SstEntry>* out,
   if (out != nullptr) {
     out->clear();
   }
+  // Full scans reuse the same verified-block path as point lookups so data
+  // integrity checks stay consistent between compaction, snapshots, and reads.
   for (std::size_t i = 0; i < index_.size(); ++i) {
     const auto& entry = index_[i];
     std::vector<std::byte> payload;

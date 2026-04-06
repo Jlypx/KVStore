@@ -124,6 +124,8 @@ auto KvEngine::Open() -> bool {
 
   sst_dir_ = wal_path_.parent_path() / "sst";
   block_cache_ = std::make_shared<cache::BlockCache>(64);
+  // Recovery order matters: load immutable SST state first, then replay every
+  // WAL generation on top so memtable_ represents the newest in-memory delta.
   if (!LoadSstables()) {
     return false;
   }
@@ -164,6 +166,8 @@ auto KvEngine::Open() -> bool {
   recovery_stats_ = replay_result.stats;
   recovery_stats_.duplicate_requests = duplicate_requests;
 
+  // Re-open the newest WAL segment for appends. Older generations stay
+  // read-only history until a flush/snapshot cycle removes them.
   const auto active_wal_path = wal_segments.empty() ? wal_path_ : wal_segments.back();
   next_wal_generation_ =
       ParseWalGenerationFromFilename(active_wal_path).value_or(0) + 1;
@@ -231,6 +235,8 @@ auto KvEngine::Flush() -> bool {
     return true;
   }
 
+  // Flush persists the current memtable as an immutable SST, then rotates WAL
+  // generation so subsequent writes only describe mutations after this flush.
   std::vector<SstEntry> sst_entries;
   sst_entries.reserve(entries.size());
   for (const auto& entry : entries) {
@@ -284,6 +290,8 @@ auto KvEngine::Compact() -> bool {
     inputs.push_back(sst.path);
   }
 
+  // Compaction rewrites the visible state into one SST. Tombstones are kept or
+  // dropped by the compactor according to the merged newest value for each key.
   const auto output_path = NextSstPath();
   const SstWriteOptions options{
       .target_block_size = 4096,
@@ -329,6 +337,8 @@ auto KvEngine::ExportSnapshotPayload(std::string* payload) -> bool {
 
   std::unordered_map<std::string, SnapshotValue> merged;
 
+  // Merge oldest-to-newest SSTs first, then overlay the mutable memtable so the
+  // snapshot encodes the same key visibility a live Get() would observe.
   for (const auto& sstable : sstables_) {
     std::vector<SstEntry> entries;
     integrity::IntegrityError scan_error;
@@ -357,6 +367,8 @@ auto KvEngine::ExportSnapshotPayload(std::string* payload) -> bool {
   std::sort(live_entries.begin(), live_entries.end(),
             [](const auto& a, const auto& b) { return a.first < b.first; });
 
+  // Snapshot payload carries live KV pairs plus request_id history. The latter
+  // preserves idempotency guarantees after a follower installs the snapshot.
   const auto request_ids = memtable_.SnapshotRequestIds();
   std::string encoded;
   encoded.reserve(16);
@@ -431,6 +443,8 @@ auto KvEngine::InstallSnapshotPayload(std::string_view payload) -> bool {
     return false;
   }
 
+  // Snapshot install is a full local state replacement: discard existing WAL
+  // generations and SSTs, then rebuild storage from the transferred snapshot.
   std::error_code ec;
   for (const auto& segment : DiscoverWalSegments(wal_path_)) {
     std::filesystem::remove(segment, ec);
@@ -547,6 +561,8 @@ auto KvEngine::ApplyMutation(const Mutation& mutation) -> ApplyResult {
     };
   }
 
+  // The write becomes visible in memory only after the WAL append succeeds, so
+  // crash recovery never misses an acknowledged mutation.
   const auto apply_result = memtable_.Apply(mutation);
   return ApplyResult{
       .applied = (apply_result == ApplyDisposition::kApplied),
@@ -607,6 +623,8 @@ auto KvEngine::LoadSstables() -> bool {
     sstables_.push_back(SstableFile{.path = path, .reader = std::move(reader)});
     max_id = std::max(max_id, id);
   }
+  // Readers search sstables_ from back to front, so keeping this vector ordered
+  // by creation id naturally makes newer tables shadow older ones.
   next_sst_id_ = max_id + 1;
   return true;
 }
