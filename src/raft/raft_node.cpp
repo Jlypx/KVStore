@@ -40,6 +40,8 @@ RaftNode::RaftNode(RaftNodeConfig config, SendFn send)
   }
 
   if (!config_.storage_dir.empty()) {
+    // Raft metadata and log are restored before the node starts ticking so the
+    // first election and append RPCs already reflect the durable prefix.
     storage_ = std::make_unique<RaftStorage>(config_.storage_dir);
     PersistentRaftState persisted;
     if (storage_->Load(&persisted)) {
@@ -52,6 +54,8 @@ RaftNode::RaftNode(RaftNodeConfig config, SendFn send)
   }
 
   if (log_.empty()) {
+    // Keep a sentinel entry at log_base_index_. This makes prev_log_index /
+    // prev_log_term lookups work uniformly even after compaction or snapshotting.
     log_.push_back(LogEntry{.term = log_base_term_, .command = ""});
   }
   ResetElectionTimeout();
@@ -72,6 +76,8 @@ auto RaftNode::Tick() -> void {
   tick_ += 1;
 
   if (role_ == Role::kLeader) {
+    // Leaders only drive heartbeats from Tick(); election timeouts are ignored
+    // once leadership is established.
     heartbeat_elapsed_ += 1;
     if (heartbeat_elapsed_ >= config_.heartbeat_interval_ticks) {
       heartbeat_elapsed_ = 0;
@@ -105,6 +111,9 @@ auto RaftNode::Step(const Message& message) -> void {
         } else if constexpr (std::is_same_v<T, InstallSnapshotRequest>) {
           SendTo(message.from, Rpc{BuildInstallSnapshotResponse(message.from, rpc)});
         } else if constexpr (std::is_same_v<T, InstallSnapshotResponse>) {
+          // A successful snapshot install advances the follower to
+          // last_included_index, which is the same state transition we need
+          // after a successful AppendEntries response.
           HandleAppendEntriesResponse(
               message.from,
               AppendEntriesResponse{.term = rpc.term,
@@ -164,6 +173,8 @@ auto RaftNode::BecomeLeader() -> void {
   leader_id_ = config_.node_id;
   votes_granted_ = 0;
 
+  // Append a no-op entry in the new term so the leader can safely advance
+  // commit_index_ using Raft's "current-term entry" rule.
   log_.push_back(LogEntry{.term = current_term_, .command = ""});
   PersistLog();
 
@@ -248,6 +259,8 @@ auto RaftNode::LeaderSendAppendEntries(NodeId follower_id) -> void {
 
   LogIndex next = it->second;
   if (next <= log_base_index_) {
+    // The follower is asking for entries that have already been compacted
+    // locally, so replication must switch to InstallSnapshot first.
     if (snapshot_hooks_.on_snapshot_send_requested) {
       snapshot_hooks_.on_snapshot_send_requested(
           follower_id, SnapshotMetadata{.last_included_index = log_base_index_,
@@ -256,6 +269,8 @@ auto RaftNode::LeaderSendAppendEntries(NodeId follower_id) -> void {
     return;
   }
 
+  // This implementation sends the remaining suffix in one message. It keeps the
+  // code simple and is sufficient for the small-scale test cluster in this repo.
   const auto last = last_log_index();
   if (next > last + 1) {
     next = last + 1;
@@ -308,6 +323,8 @@ auto RaftNode::HandleAppendEntriesResponse(
   if (!response.success) {
     auto it = next_index_.find(from);
     if (it != next_index_.end()) {
+      // Back off one slot at a time until prev_log_index / prev_log_term lands
+      // on a prefix the follower accepts.
       const LogIndex current_next = it->second;
       it->second = current_next > 1 ? current_next - 1 : 1;
       LeaderSendAppendEntries(from);
@@ -327,6 +344,9 @@ auto RaftNode::AdvanceCommitIndex() -> void {
     return;
   }
 
+  // Only entries from the leader's current term are allowed to advance the
+  // commit index directly. Older entries become committed implicitly once a
+  // current-term entry after them is committed.
   for (LogIndex idx = last_log_index(); idx > commit_index_; --idx) {
     const auto term = TermAt(idx);
     if (!term.has_value() || term.value() != current_term_) {
@@ -354,6 +374,8 @@ auto RaftNode::ApplyCommitted() -> void {
     return;
   }
 
+  // Batch everything between last_applied_ and commit_index_ so the storage
+  // layer can apply a contiguous committed prefix in order.
   std::vector<CommittedEntry> committed;
   for (LogIndex idx = last_applied_ + 1; idx <= commit_index_; ++idx) {
     const auto offset = LogOffset(idx);
@@ -415,6 +437,8 @@ auto RaftNode::MaybeSnapshotMetadata() const -> std::optional<SnapshotMetadata> 
   if (!term.has_value()) {
     return std::nullopt;
   }
+  // Returning metadata here only says "a snapshot would now be worthwhile".
+  // The caller decides when to materialize engine state and truncate the log.
   return SnapshotMetadata{
       .last_included_index = commit_index_,
       .last_included_term = term.value(),
@@ -426,6 +450,8 @@ auto RaftNode::InstallLocalSnapshot(const SnapshotMetadata& metadata) -> void {
     return;
   }
 
+  // Preserve the suffix after last_included_index so followers that were only
+  // slightly behind can continue with AppendEntries instead of a full restart.
   std::vector<LogEntry> new_log;
   const auto suffix_start = metadata.last_included_index + 1;
   new_log.push_back(LogEntry{.term = metadata.last_included_term, .command = ""});
@@ -558,6 +584,8 @@ auto RaftNode::BuildAppendEntriesResponse(
     const auto& entry = request.entries[entry_offset];
     const auto offset = LogOffset(index);
     if (!offset.has_value() || log_[offset.value()].term != entry.term) {
+      // Once a conflict is found, the follower discards its divergent suffix and
+      // accepts the leader's suffix from this point onward.
       if (offset.has_value()) {
         const auto keep = std::max<std::size_t>(1U, offset.value());
         log_.resize(keep);
@@ -607,6 +635,8 @@ auto RaftNode::BuildInstallSnapshotResponse(
 
   leader_id_ = request.leader_id;
   election_elapsed_ = 0;
+  // The state machine snapshot is installed before we report success so the
+  // leader can immediately resume normal AppendEntries after this response.
   InstallLocalSnapshot(SnapshotMetadata{
       .last_included_index = request.last_included_index,
       .last_included_term = request.last_included_term,

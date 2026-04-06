@@ -140,6 +140,8 @@ auto ClusterNodeService::Start() -> bool {
     return true;
   }
 
+  // Each process owns exactly one engine and one Raft node; peer replication is
+  // delegated to NetworkTransport instead of the in-memory embedded transport.
   const auto engine_dir = config_.data_dir / "engine";
   const auto wal_path = engine_dir / "000001.wal";
   engine_ = std::make_unique<kvstore::engine::KvEngine>(wal_path);
@@ -196,6 +198,9 @@ auto ClusterNodeService::Start() -> bool {
             if (!engine_->ExportSnapshotPayload(&payload)) {
               return;
             }
+            // The engine snapshot bytes travel over the same transport as other
+            // Raft RPCs; followers install the payload before updating Raft
+            // snapshot metadata so storage and log state stay aligned.
             transport_->Send(kvstore::raft::Message{
                 .from = config_.self_id,
                 .to = target,
@@ -239,6 +244,8 @@ auto ClusterNodeService::TickLoop() -> void {
       }
       if (node_ && node_->role() == kvstore::raft::Role::kLeader &&
           pending_snapshot_.has_value()) {
+        // Snapshot creation is deferred out of OnCommitted() so the commit path
+        // stays focused on applying entries and waking waiting clients.
         node_->InstallLocalSnapshot(pending_snapshot_.value());
         pending_snapshot_.reset();
       }
@@ -266,6 +273,8 @@ auto ClusterNodeService::OnCommitted(
       if (!applied.Ok()) {
         continue;
       }
+      // The API-level completion caches sit outside the engine so retrying the
+      // exact same request_id can return the original semantic result.
       PutResult result{.overwritten = existed};
       PutCacheEntry cache_entry;
       cache_entry.result = result;
@@ -300,6 +309,8 @@ auto ClusterNodeService::OnCommitted(
   if (node_ && node_->role() == kvstore::raft::Role::kLeader) {
     const auto snapshot = node_->MaybeSnapshotMetadata();
     if (snapshot.has_value()) {
+      // Only mark snapshot intent here; the actual truncation runs from TickLoop
+      // once the committed entries have been fully applied above.
       pending_snapshot_ = snapshot;
     }
   }
@@ -334,6 +345,8 @@ auto ClusterNodeService::Put(const std::string& key,
   {
     std::lock_guard<std::recursive_mutex> lock(mu_);
 
+    // completed_* and inflight_* together implement at-most-once semantics for
+    // client-visible effects even though clients may retry across timeouts.
     const auto done = completed_puts_.find(request_id);
     if (done != completed_puts_.end()) {
       if (done->second.key_crc != key_crc || done->second.value_crc != value_crc ||
@@ -371,6 +384,8 @@ auto ClusterNodeService::Put(const std::string& key,
         return MakeNotLeader(leader_hint);
       }
       leader_hint = node_->node_id();
+      // Publish the waiter before proposing so a very fast local commit cannot
+      // race past the caller and leave it waiting on an untracked request.
       const auto propose = node_->Propose(EncodeCommand(EncodedCommand{
           .op = Op::kPut, .key = key, .value = value, .request_id = request_id}));
       leader_hint = propose.leader_hint;
@@ -408,6 +423,8 @@ auto ClusterNodeService::Get(const std::string& key) -> Result<GetResult> {
   if (node_->role() != kvstore::raft::Role::kLeader) {
     return MakeNotLeader(node_->leader_id());
   }
+  // This mirrors KvRaftService::Get(): linearizable reads are served only while
+  // the leader still has fresh quorum contact.
   if (!node_->HasQuorumContact()) {
     return MakeUnavailable("leader has no quorum contact (linearizable read rejected)");
   }
@@ -504,6 +521,8 @@ auto ClusterNodeService::HandlePeerInstallSnapshot(
     const kvstore::raft::InstallSnapshotRequest& request)
     -> kvstore::raft::InstallSnapshotResponse {
   std::lock_guard<std::recursive_mutex> lock(mu_);
+  // Install the engine bytes first; only if storage replacement succeeds do we
+  // let Raft advance log_base_index_ / log_base_term_ to the snapshot point.
   const bool ok = engine_ && engine_->InstallSnapshotPayload(request.snapshot_payload);
   if (!ok || !node_) {
     return kvstore::raft::InstallSnapshotResponse{

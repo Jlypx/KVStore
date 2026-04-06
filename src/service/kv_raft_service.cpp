@@ -214,6 +214,8 @@ struct KvRaftService::Impl {
 
     cluster = kvstore::raft::CreateEmbeddedRaftCluster(ro);
 
+    // Embedded mode still gives every logical node its own engine directory so
+    // WAL, SST, and snapshot behavior matches the real multi-process cluster.
     for (kvstore::raft::NodeId id : options_.node_ids) {
       auto node_dir = data_dir_ / ("node" + std::to_string(id));
       std::filesystem::create_directories(node_dir, ec);
@@ -259,6 +261,8 @@ struct KvRaftService::Impl {
                 if (!source_it->second.engine->ExportSnapshotPayload(&payload)) {
                   return;
                 }
+                // In embedded mode we can short-circuit the network and hand the
+                // snapshot payload directly to the target engine + Raft node.
                 if (!target_it->second.engine->InstallSnapshotPayload(payload)) {
                   return;
                 }
@@ -348,6 +352,8 @@ struct KvRaftService::Impl {
         if (!ar.Ok()) {
           continue;
         }
+        // Request-id caches live above the engine so retries can be answered
+        // consistently even after the command has already committed.
         PutResult res{.overwritten = existed};
         PutCacheEntry entry;
         entry.result = res;
@@ -439,6 +445,8 @@ auto KvRaftService::Put(const std::string& key,
   {
     std::lock_guard<std::mutex> lock(impl_->mu);
 
+    // First consult the completion / inflight caches so duplicate client retries
+    // do not append duplicate Raft log entries.
     const auto done = impl_->completed_puts.find(request_id);
     if (done != impl_->completed_puts.end()) {
       if (done->second.key_crc != key_crc || done->second.value_crc != value_crc ||
@@ -474,6 +482,8 @@ auto KvRaftService::Put(const std::string& key,
         impl_->inflight_puts.erase(request_id);
         return MakeUnavailable("no leader elected");
       }
+      // The shared_future is published before Propose() so the commit callback
+      // can fulfill it immediately if the entry commits very quickly.
       propose = leader_node->Propose(EncodeCommand(Command{.op = Op::kPut,
                                                           .key = key,
                                                           .value = value,
@@ -523,6 +533,8 @@ auto KvRaftService::Delete(const std::string& key,
   {
     std::lock_guard<std::mutex> lock(impl_->mu);
 
+    // Delete follows the same request-id dedupe path as Put so retries stay
+    // idempotent even across leader changes.
     const auto done = impl_->completed_deletes.find(request_id);
     if (done != impl_->completed_deletes.end()) {
       return done->second;
@@ -586,6 +598,8 @@ auto KvRaftService::Get(const std::string& key) -> Result<GetResult> {
   if (leader_node->role() != kvstore::raft::Role::kLeader) {
     return MakeNotLeader(leader_node->leader_id());
   }
+  // We reject reads when the leader has lost recent quorum contact. That keeps
+  // Get linearizable without implementing a separate ReadIndex path.
   if (!leader_node->HasQuorumContact()) {
     return MakeUnavailable("leader has no quorum contact (linearizable read rejected)");
   }
@@ -636,6 +650,8 @@ auto KvRaftService::ForceLeaderSnapshotForTesting() -> bool {
   if (!snapshot.has_value()) {
     return false;
   }
+  // Test helper: truncate the leader immediately once the committed prefix is
+  // long enough, so catch-up paths can be exercised deterministically.
   leader->InstallLocalSnapshot(snapshot.value());
   return true;
 }
