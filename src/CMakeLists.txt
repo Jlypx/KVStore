@@ -37,9 +37,12 @@ if(KVSTORE_ENABLE_GRPC)
 
   # Ensure repo-local protoc can find its shared libs.
   set(_proto_sysroot_usr "${PROJECT_SOURCE_DIR}/.tools/proto/sysroot/usr")
+  set(_grpc_sysroot_usr "${PROJECT_SOURCE_DIR}/.tools/grpc/sysroot/usr")
   set(_proto_ld_dirs
     "${_proto_sysroot_usr}/lib/${CMAKE_LIBRARY_ARCHITECTURE}"
     "${_proto_sysroot_usr}/lib"
+    "${_grpc_sysroot_usr}/lib/${CMAKE_LIBRARY_ARCHITECTURE}"
+    "${_grpc_sysroot_usr}/lib"
   )
   string(JOIN ":" _proto_ld_path ${_proto_ld_dirs})
 
