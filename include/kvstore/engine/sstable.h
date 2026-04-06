@@ -91,6 +91,17 @@ struct SstWriteOptions {
   std::uint32_t target_block_size = 4096;
 };
 
+enum class SstEntryKind : std::uint8_t {
+  kValue = 1,
+  kTombstone = 2,
+};
+
+struct SstEntry {
+  std::string key;
+  std::string value;
+  bool tombstone = false;
+};
+
 struct SstBlockIndexEntry {
   std::string first_key;
   std::uint64_t block_offset = 0;
@@ -99,6 +110,7 @@ struct SstBlockIndexEntry {
 
 struct SstGetResult {
   bool found = false;
+  bool tombstone = false;
   std::optional<std::string> value;
   std::optional<integrity::IntegrityError> error;
   [[nodiscard]] auto Ok() const -> bool { return !error.has_value(); }
@@ -108,6 +120,11 @@ class SstWriter {
  public:
   static auto Write(const std::filesystem::path& path,
                     const std::vector<std::pair<std::string, std::string>>& kvs,
+                    const SstWriteOptions& options,
+                    integrity::IntegrityError* error) -> bool;
+
+  static auto Write(const std::filesystem::path& path,
+                    const std::vector<SstEntry>& entries,
                     const SstWriteOptions& options,
                     integrity::IntegrityError* error) -> bool;
 };
@@ -125,6 +142,9 @@ class SstReader {
   // This verifies each data block checksum.
   auto ScanAll(std::vector<std::pair<std::string, std::string>>* out,
                integrity::IntegrityError* error) const -> bool;
+
+  auto ScanAllEntries(std::vector<SstEntry>* out,
+                      integrity::IntegrityError* error) const -> bool;
 
   [[nodiscard]] auto path() const -> const std::filesystem::path& { return path_; }
   [[nodiscard]] auto index() const -> const std::vector<SstBlockIndexEntry>& {

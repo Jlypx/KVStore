@@ -28,12 +28,34 @@ enum class ApplyDisposition {
   kDuplicate,
 };
 
+enum class LookupState {
+  kMissing,
+  kValue,
+  kTombstone,
+};
+
+struct LookupResult {
+  LookupState state = LookupState::kMissing;
+  std::string value;
+};
+
+struct ValueEntry {
+  bool tombstone = false;
+  std::string value;
+};
+
+struct MemTableEntrySnapshot {
+  std::string key;
+  bool tombstone = false;
+  std::string value;
+};
+
 class MemTable {
  public:
   auto Apply(const Mutation& mutation) -> ApplyDisposition;
 
   [[nodiscard]] auto Get(const std::string& key) const
-      -> std::optional<std::string>;
+      -> LookupResult;
 
   [[nodiscard]] auto ContainsRequestId(const std::string& request_id) const
       -> bool;
@@ -43,13 +65,13 @@ class MemTable {
   // Snapshot current key/value state for SSTable flush.
   // The returned vector is sorted by key in ascending order.
   [[nodiscard]] auto SortedEntries() const
-      -> std::vector<std::pair<std::string, std::string>>;
+      -> std::vector<MemTableEntrySnapshot>;
 
   // Clears only the key/value map, keeping request-id history for idempotency.
   auto ClearKvs() -> void;
 
  private:
-  std::unordered_map<std::string, std::string> kv_;
+  std::unordered_map<std::string, ValueEntry> kv_;
   std::unordered_set<std::string> applied_request_ids_;
 };
 

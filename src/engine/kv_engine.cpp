@@ -113,8 +113,11 @@ auto KvEngine::Get(const std::string& key) -> std::optional<std::string> {
   last_integrity_error_.reset();
 
   const auto mem_value = memtable_.Get(key);
-  if (mem_value.has_value()) {
-    return mem_value;
+  if (mem_value.state == LookupState::kValue) {
+    return mem_value.value;
+  }
+  if (mem_value.state == LookupState::kTombstone) {
+    return std::nullopt;
   }
 
   // Newest-to-oldest search.
@@ -126,6 +129,9 @@ auto KvEngine::Get(const std::string& key) -> std::optional<std::string> {
       return std::nullopt;
     }
     if (res.found) {
+      if (res.tombstone) {
+        return std::nullopt;
+      }
       return res.value;
     }
   }
@@ -139,12 +145,19 @@ auto KvEngine::Flush() -> bool {
     return true;
   }
 
+  std::vector<SstEntry> sst_entries;
+  sst_entries.reserve(entries.size());
+  for (const auto& entry : entries) {
+    sst_entries.push_back(
+        SstEntry{.key = entry.key, .value = entry.value, .tombstone = entry.tombstone});
+  }
+
   integrity::IntegrityError error;
   const auto path = NextSstPath();
   const SstWriteOptions options{
       .target_block_size = 4096,
   };
-  if (!SstWriter::Write(path, entries, options, &error)) {
+  if (!SstWriter::Write(path, sst_entries, options, &error)) {
     last_integrity_error_ = error;
     return false;
   }

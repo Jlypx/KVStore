@@ -13,7 +13,7 @@ auto Compactor::CompactToSingleSstable(
     std::shared_ptr<cache::BlockCache> block_cache,
     integrity::IntegrityError* error) -> bool {
   // Newest wins: iterate newest->oldest and take first occurrence per key.
-  std::unordered_map<std::string, std::string> chosen;
+  std::unordered_map<std::string, SstEntry> chosen;
   chosen.reserve(1024);
 
   for (std::size_t i = inputs_oldest_to_newest.size(); i > 0; --i) {
@@ -26,28 +26,28 @@ auto Compactor::CompactToSingleSstable(
       }
       return false;
     }
-    std::vector<std::pair<std::string, std::string>> kvs;
+    std::vector<SstEntry> kvs;
     integrity::IntegrityError scan_error;
-    if (!reader.ScanAll(&kvs, &scan_error)) {
+    if (!reader.ScanAllEntries(&kvs, &scan_error)) {
       if (error != nullptr) {
         *error = scan_error;
       }
       return false;
     }
-    for (auto& [key, value] : kvs) {
-      if (chosen.find(key) == chosen.end()) {
-        chosen.emplace(std::move(key), std::move(value));
+    for (auto& entry : kvs) {
+      if (chosen.find(entry.key) == chosen.end()) {
+        chosen.emplace(entry.key, std::move(entry));
       }
     }
   }
 
-  std::vector<std::pair<std::string, std::string>> out_entries;
+  std::vector<SstEntry> out_entries;
   out_entries.reserve(chosen.size());
-  for (auto& [key, value] : chosen) {
-    out_entries.emplace_back(std::move(key), std::move(value));
+  for (auto& [key, entry] : chosen) {
+    out_entries.push_back(std::move(entry));
   }
   std::sort(out_entries.begin(), out_entries.end(),
-            [](const auto& a, const auto& b) { return a.first < b.first; });
+            [](const auto& a, const auto& b) { return a.key < b.key; });
 
   return SstWriter::Write(output, out_entries, options, error);
 }

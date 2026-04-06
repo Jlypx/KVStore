@@ -112,9 +112,15 @@ auto BuildBlockFrame(const std::vector<std::byte>& payload) -> std::vector<std::
   return frame;
 }
 
+auto IsValidEntryKind(std::uint8_t kind) -> bool {
+  return kind == static_cast<std::uint8_t>(SstEntryKind::kValue) ||
+         kind == static_cast<std::uint8_t>(SstEntryKind::kTombstone);
+}
+
 struct ParsedGet {
   bool ok = true;
   bool found = false;
+  bool tombstone = false;
   std::optional<std::string> value;
 };
 
@@ -122,10 +128,15 @@ auto ParseDataBlockGet(std::string_view key, const std::vector<std::byte>& paylo
     -> ParsedGet {
   ParsedGet out;
   std::size_t offset = 0;
-  while (offset + 8U <= payload.size()) {
-    const auto key_size = static_cast<std::size_t>(ReadLe32(payload, offset));
-    const auto value_size = static_cast<std::size_t>(ReadLe32(payload, offset + 4U));
-    offset += 8U;
+  while (offset + 9U <= payload.size()) {
+    const auto kind = static_cast<std::uint8_t>(payload[offset]);
+    if (!IsValidEntryKind(kind)) {
+      out.ok = false;
+      return out;
+    }
+    const auto key_size = static_cast<std::size_t>(ReadLe32(payload, offset + 1U));
+    const auto value_size = static_cast<std::size_t>(ReadLe32(payload, offset + 5U));
+    offset += 9U;
     if (key_size > payload.size() - offset) {
       out.ok = false;
       return out;
@@ -139,6 +150,11 @@ auto ParseDataBlockGet(std::string_view key, const std::vector<std::byte>& paylo
     }
     if (key_str == key) {
       out.found = true;
+      out.tombstone = kind == static_cast<std::uint8_t>(SstEntryKind::kTombstone);
+      if (out.tombstone) {
+        out.value.reset();
+        return out;
+      }
       out.value = CopyBytesToString(payload, offset, value_size);
       return out;
     }
@@ -152,16 +168,20 @@ auto ParseDataBlockGet(std::string_view key, const std::vector<std::byte>& paylo
 }
 
 auto ParseDataBlockAll(const std::vector<std::byte>& payload,
-                       std::vector<std::pair<std::string, std::string>>* out)
+                       std::vector<SstEntry>* out)
     -> bool {
   if (out == nullptr) {
     return true;
   }
   std::size_t offset = 0;
-  while (offset + 8U <= payload.size()) {
-    const auto key_size = static_cast<std::size_t>(ReadLe32(payload, offset));
-    const auto value_size = static_cast<std::size_t>(ReadLe32(payload, offset + 4U));
-    offset += 8U;
+  while (offset + 9U <= payload.size()) {
+    const auto kind = static_cast<std::uint8_t>(payload[offset]);
+    if (!IsValidEntryKind(kind)) {
+      return false;
+    }
+    const auto key_size = static_cast<std::size_t>(ReadLe32(payload, offset + 1U));
+    const auto value_size = static_cast<std::size_t>(ReadLe32(payload, offset + 5U));
+    offset += 9U;
     if (key_size > payload.size() - offset) {
       return false;
     }
@@ -172,7 +192,11 @@ auto ParseDataBlockAll(const std::vector<std::byte>& payload,
     }
     const auto value = CopyBytesToString(payload, offset, value_size);
     offset += value_size;
-    out->emplace_back(key, value);
+    out->push_back(SstEntry{
+        .key = key,
+        .value = value,
+        .tombstone = kind == static_cast<std::uint8_t>(SstEntryKind::kTombstone),
+    });
   }
   return offset == payload.size();
 }
@@ -181,6 +205,18 @@ auto ParseDataBlockAll(const std::vector<std::byte>& payload,
 
 auto SstWriter::Write(const std::filesystem::path& path,
                       const std::vector<std::pair<std::string, std::string>>& kvs,
+                      const SstWriteOptions& options,
+                      integrity::IntegrityError* error) -> bool {
+  std::vector<SstEntry> entries;
+  entries.reserve(kvs.size());
+  for (const auto& [key, value] : kvs) {
+    entries.push_back(SstEntry{.key = key, .value = value, .tombstone = false});
+  }
+  return Write(path, entries, options, error);
+}
+
+auto SstWriter::Write(const std::filesystem::path& path,
+                      const std::vector<SstEntry>& kvs,
                       const SstWriteOptions& options,
                       integrity::IntegrityError* error) -> bool {
   const auto parent = path.parent_path();
@@ -255,22 +291,30 @@ auto SstWriter::Write(const std::filesystem::path& path,
   const std::size_t max_payload =
       std::max<std::uint32_t>(options.target_block_size, 128U);
   std::size_t block_index = 0;
-  for (const auto& [key, value] : kvs) {
+  for (const auto& entry_value : kvs) {
+    const auto& key = entry_value.key;
+    const auto& value = entry_value.value;
+    const auto kind = entry_value.tombstone ? SstEntryKind::kTombstone
+                                            : SstEntryKind::kValue;
     // Entry encoding.
     std::vector<std::byte> entry;
-    entry.reserve(8U + key.size() + value.size());
+    const auto encoded_value_size = entry_value.tombstone ? 0U : value.size();
+    entry.reserve(9U + key.size() + encoded_value_size);
     if (key.size() > std::numeric_limits<std::uint32_t>::max() ||
-        value.size() > std::numeric_limits<std::uint32_t>::max()) {
+        encoded_value_size > std::numeric_limits<std::uint32_t>::max()) {
       if (error != nullptr) {
         *error = MakeError(integrity::IntegrityErrorCode::kInvalidRecord, 0,
                            "key/value exceeds u32 size limits");
       }
       return false;
     }
+    entry.push_back(static_cast<std::byte>(static_cast<std::uint8_t>(kind)));
     PutLe32(&entry, static_cast<std::uint32_t>(key.size()));
-    PutLe32(&entry, static_cast<std::uint32_t>(value.size()));
+    PutLe32(&entry, static_cast<std::uint32_t>(encoded_value_size));
     AppendString(&entry, key);
-    AppendString(&entry, value);
+    if (!entry_value.tombstone) {
+      AppendString(&entry, value);
+    }
 
     if (current_payload.empty()) {
       current_first_key = key;
@@ -727,12 +771,17 @@ auto SstReader::Get(const std::string& key) const -> SstGetResult {
     return result;
   }
   result.found = true;
+  result.tombstone = parsed.tombstone;
+  if (parsed.tombstone) {
+    result.value.reset();
+    return result;
+  }
   result.value = parsed.value;
   return result;
 }
 
-auto SstReader::ScanAll(std::vector<std::pair<std::string, std::string>>* out,
-                        integrity::IntegrityError* error) const -> bool {
+auto SstReader::ScanAllEntries(std::vector<SstEntry>* out,
+                               integrity::IntegrityError* error) const -> bool {
   if (out != nullptr) {
     out->clear();
   }
@@ -782,6 +831,23 @@ auto SstReader::ScanAll(std::vector<std::pair<std::string, std::string>>* out,
                                " invalid data block payload encoding");
       }
       return false;
+    }
+  }
+  return true;
+}
+
+auto SstReader::ScanAll(std::vector<std::pair<std::string, std::string>>* out,
+                        integrity::IntegrityError* error) const -> bool {
+  std::vector<SstEntry> entries;
+  if (!ScanAllEntries(&entries, error)) {
+    return false;
+  }
+  if (out != nullptr) {
+    out->clear();
+    for (const auto& entry : entries) {
+      if (!entry.tombstone) {
+        out->emplace_back(entry.key, entry.value);
+      }
     }
   }
   return true;

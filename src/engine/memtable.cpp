@@ -12,22 +12,26 @@ auto MemTable::Apply(const Mutation& mutation) -> ApplyDisposition {
   applied_request_ids_.insert(mutation.request_id);
   switch (mutation.type) {
     case MutationType::kPut:
-      kv_[mutation.key] = mutation.value;
+      kv_[mutation.key] =
+          ValueEntry{.tombstone = false, .value = mutation.value};
       break;
     case MutationType::kDelete:
-      kv_.erase(mutation.key);
+      kv_[mutation.key] = ValueEntry{.tombstone = true, .value = ""};
       break;
   }
 
   return ApplyDisposition::kApplied;
 }
 
-auto MemTable::Get(const std::string& key) const -> std::optional<std::string> {
+auto MemTable::Get(const std::string& key) const -> LookupResult {
   const auto it = kv_.find(key);
   if (it == kv_.end()) {
-    return std::nullopt;
+    return LookupResult{};
   }
-  return it->second;
+  if (it->second.tombstone) {
+    return LookupResult{.state = LookupState::kTombstone, .value = ""};
+  }
+  return LookupResult{.state = LookupState::kValue, .value = it->second.value};
 }
 
 auto MemTable::ContainsRequestId(const std::string& request_id) const -> bool {
@@ -39,14 +43,17 @@ auto MemTable::EntryCount() const -> std::size_t {
 }
 
 auto MemTable::SortedEntries() const
-    -> std::vector<std::pair<std::string, std::string>> {
-  std::vector<std::pair<std::string, std::string>> entries;
+    -> std::vector<MemTableEntrySnapshot> {
+  std::vector<MemTableEntrySnapshot> entries;
   entries.reserve(kv_.size());
   for (const auto& [key, value] : kv_) {
-    entries.emplace_back(key, value);
+    entries.push_back(
+        MemTableEntrySnapshot{.key = key,
+                              .tombstone = value.tombstone,
+                              .value = value.value});
   }
   std::sort(entries.begin(), entries.end(),
-            [](const auto& a, const auto& b) { return a.first < b.first; });
+            [](const auto& a, const auto& b) { return a.key < b.key; });
   return entries;
 }
 

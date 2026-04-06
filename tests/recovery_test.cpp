@@ -63,5 +63,84 @@ int main() {
     return 1;
   }
 
+  {
+    kvstore::engine::KvEngine flushed_then_deleted(wal);
+    if (!Expect(flushed_then_deleted.Open(), "engine reopen should succeed")) {
+      return 1;
+    }
+
+    const auto put_c = flushed_then_deleted.Put("k3", "v3", "req-4");
+    if (!Expect(put_c.Ok() && put_c.applied, "third put should apply")) {
+      return 1;
+    }
+    if (!Expect(flushed_then_deleted.Flush(), "flush before delete should succeed")) {
+      return 1;
+    }
+
+    const auto del_c = flushed_then_deleted.Delete("k3", "req-5");
+    if (!Expect(del_c.Ok() && del_c.applied, "delete after flush should apply")) {
+      return 1;
+    }
+    if (!Expect(flushed_then_deleted.Flush(),
+                "flush after delete should succeed")) {
+      return 1;
+    }
+  }
+
+  kvstore::engine::KvEngine deleted_after_flush(wal);
+  if (!Expect(deleted_after_flush.Open(),
+              "engine reopen after flushed delete should succeed")) {
+    return 1;
+  }
+
+  const auto value_k3 = deleted_after_flush.Get("k3");
+  if (!Expect(!value_k3.has_value(),
+              "k3 should remain deleted after flush plus restart")) {
+    return 1;
+  }
+
+  const auto tombstone_dir = MakeTempDirectory("recovery_tombstone_sst");
+  const auto tombstone_wal = tombstone_dir / "000001.wal";
+  {
+    kvstore::engine::KvEngine tombstone_engine(tombstone_wal);
+    if (!Expect(tombstone_engine.Open(),
+                "tombstone engine open should succeed")) {
+      return 1;
+    }
+    if (!Expect(tombstone_engine.Put("k4", "v4", "req-6").Ok(),
+                "put before tombstone flush should succeed")) {
+      return 1;
+    }
+    if (!Expect(tombstone_engine.Flush(),
+                "flush before tombstone delete should succeed")) {
+      return 1;
+    }
+    if (!Expect(tombstone_engine.Delete("k4", "req-7").Ok(),
+                "delete before tombstone flush should succeed")) {
+      return 1;
+    }
+    if (!Expect(tombstone_engine.Flush(),
+                "flush after tombstone delete should succeed")) {
+      return 1;
+    }
+  }
+
+  std::error_code remove_ec;
+  std::filesystem::remove(tombstone_wal, remove_ec);
+  if (!Expect(!remove_ec, "wal removal should succeed")) {
+    return 1;
+  }
+
+  kvstore::engine::KvEngine tombstone_from_sst_only(tombstone_wal);
+  if (!Expect(tombstone_from_sst_only.Open(),
+              "engine open from SST-only state should succeed")) {
+    return 1;
+  }
+  const auto value_k4 = tombstone_from_sst_only.Get("k4");
+  if (!Expect(!value_k4.has_value(),
+              "k4 should remain deleted when recovered from SST only")) {
+    return 1;
+  }
+
   return 0;
 }

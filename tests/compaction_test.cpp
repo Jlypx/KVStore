@@ -160,6 +160,39 @@ auto TestCompactionFailsOnCorruptedInput() -> bool {
                 "checksum mismatch expected");
 }
 
+auto TestCompactionPreservesTombstoneDeletes() -> bool {
+  const auto dir = MakeTempDirectory("compaction_tombstone");
+  const auto wal = dir / "000001.wal";
+
+  kvstore::engine::KvEngine engine(wal);
+  if (!Expect(engine.Open(), "engine open should succeed")) {
+    return false;
+  }
+
+  if (!Expect(engine.Put("gone", "v1", "rid-t-1").Ok(),
+              "put before tombstone compaction should succeed")) {
+    return false;
+  }
+  if (!Expect(engine.Flush(), "flush before tombstone delete should succeed")) {
+    return false;
+  }
+  if (!Expect(engine.Delete("gone", "rid-t-2").Ok(),
+              "delete before tombstone compaction should succeed")) {
+    return false;
+  }
+  if (!Expect(engine.Flush(), "flush after tombstone delete should succeed")) {
+    return false;
+  }
+
+  if (!Expect(engine.Compact(), "compaction with tombstone should succeed")) {
+    return false;
+  }
+
+  const auto value = engine.Get("gone");
+  return Expect(!value.has_value(),
+                "compaction must preserve tombstone delete semantics");
+}
+
 }  // namespace
 
 int main() {
@@ -167,6 +200,9 @@ int main() {
     return 1;
   }
   if (!TestCompactionFailsOnCorruptedInput()) {
+    return 1;
+  }
+  if (!TestCompactionPreservesTombstoneDeletes()) {
     return 1;
   }
   return 0;
