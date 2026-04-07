@@ -73,6 +73,19 @@ resolve_package() {
   echo "${resolved}"
 }
 
+resolve_optional_package() {
+  local prefix="$1"
+  local pattern="$2"
+  shift 2
+
+  local resolved=""
+  resolved="$(resolve_exact_package "$@" || true)"
+  if [[ -z "${resolved}" ]]; then
+    resolved="$(resolve_prefix_package "${prefix}" "${pattern}" || true)"
+  fi
+  echo "${resolved}"
+}
+
 append_package() {
   local pkg="$1"
   if [[ -z "${pkg}" ]]; then
@@ -133,6 +146,14 @@ append_package "$(resolve_package \
   "libgrpc" \
   '^libgrpc[0-9][0-9.t]*$' \
   libgrpc6 libgrpc29 libgrpc29t64)"
+append_package "$(resolve_optional_package \
+  "libabsl" \
+  '^libabsl[0-9].*$' \
+  libabsl20210324 libabsl20220623 libabsl20220623t64 libabsl20230802 libabsl20230802t64 libabsl20240722)"
+append_package "$(resolve_optional_package \
+  "libabsl-dev" \
+  '^libabsl-dev$' \
+  libabsl-dev)"
 append_package "libprotobuf-dev"
 append_package "$(resolve_package \
   "protobuf runtime" \
