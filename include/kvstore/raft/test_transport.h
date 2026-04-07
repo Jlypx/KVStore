@@ -13,6 +13,7 @@ namespace kvstore::raft {
 
 class TestTransport : public InProcessTransport {
  public:
+  using InProcessTransport::RegisterNode;
   auto RegisterNode(NodeId id, RaftNode* node) -> void;
 };
 
