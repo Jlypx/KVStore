@@ -38,9 +38,10 @@ function(kvstore_define_grpc_runtime_target)
   find_library(KVSTORE_PROTOBUF_LIB NAMES protobuf PATHS ${_grpc_lib_paths} NO_DEFAULT_PATH)
   find_library(KVSTORE_GRPC_LIB NAMES grpc PATHS ${_grpc_lib_paths} NO_DEFAULT_PATH)
   find_library(KVSTORE_GRPCPP_LIB NAMES grpc++ PATHS ${_grpc_lib_paths} NO_DEFAULT_PATH)
+  find_library(KVSTORE_GPR_LIB NAMES gpr PATHS ${_grpc_lib_paths} NO_DEFAULT_PATH)
 
-  if(NOT KVSTORE_PROTOBUF_LIB OR NOT KVSTORE_GRPC_LIB OR NOT KVSTORE_GRPCPP_LIB)
-    message(FATAL_ERROR "Unable to locate repo-local gRPC/protobuf libraries under ${KVSTORE_GRPC_SYSROOT}. Missing: protobuf=${KVSTORE_PROTOBUF_LIB}, grpc=${KVSTORE_GRPC_LIB}, grpc++=${KVSTORE_GRPCPP_LIB}")
+  if(NOT KVSTORE_PROTOBUF_LIB OR NOT KVSTORE_GRPC_LIB OR NOT KVSTORE_GRPCPP_LIB OR NOT KVSTORE_GPR_LIB)
+    message(FATAL_ERROR "Unable to locate repo-local gRPC/protobuf libraries under ${KVSTORE_GRPC_SYSROOT}. Missing: protobuf=${KVSTORE_PROTOBUF_LIB}, grpc=${KVSTORE_GRPC_LIB}, grpc++=${KVSTORE_GRPCPP_LIB}, gpr=${KVSTORE_GPR_LIB}")
   endif()
 
   if(NOT TARGET kvstore_grpc_runtime)
@@ -51,6 +52,7 @@ function(kvstore_define_grpc_runtime_target)
     target_link_libraries(kvstore_grpc_runtime INTERFACE
       "${KVSTORE_GRPCPP_LIB}"
       "${KVSTORE_GRPC_LIB}"
+      "${KVSTORE_GPR_LIB}"
       "${KVSTORE_PROTOBUF_LIB}"
       Threads::Threads
     )
